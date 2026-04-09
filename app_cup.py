@@ -275,7 +275,7 @@ with st.sidebar:
         "🏆 Europa League": {"id": 4481, "season_default": "2024-2025"},
         "🏆 Conference League": {"id": 4482, "season_default": "2024-2025"},
         "🇪🇸 Copa del Rey": {"id": 4483, "season_default": "2024-2025"},
-        "🇬🇧 FA Cup": {"id": 4490, "season_default": "2024-2025"},  # ID corregido
+        "🇬🇧 FA Cup": {"id": 4490, "season_default": "2024-2025"},
         "🇮🇹 Coppa Italia": {"id": 4485, "season_default": "2024-2025"},
         "🇩🇪 DFB-Pokal": {"id": 4486, "season_default": "2024-2025"},
         "🇫🇷 Coupe de France": {"id": 4487, "season_default": "2024-2025"},
@@ -311,23 +311,25 @@ with st.sidebar:
             st.error(f"❌ No se encontraron partidos para {copa_sel} en la temporada {season}. Prueba otra temporada (ej. 2023-2024 o 2025).")
         st.rerun()
 
+    # ========== MOSTRAR TODOS LOS PARTIDOS SIN FILTRAR ==========
     if st.session_state.get('cup_matches_cached'):
         st.markdown("---")
-        st.markdown("### 📅 Próximos encuentros")
-        hoy = datetime.now().date()
-        upcoming = []
-        for ev in st.session_state['cup_matches_cached']:
+        st.markdown("### 📋 Todos los partidos sincronizados")
+        all_matches = st.session_state['cup_matches_cached']
+        if all_matches:
+            # Ordenar por fecha (opcional)
             try:
-                fecha = datetime.strptime(ev['dateEvent'], '%Y-%m-%d').date()
-                if fecha >= hoy:
-                    upcoming.append(ev)
+                all_matches_sorted = sorted(all_matches, key=lambda x: x.get('dateEvent', ''))
             except:
-                continue
-        if upcoming:
+                all_matches_sorted = all_matches
             opciones = []
             mapeo = {}
-            for ev in upcoming[:15]:
-                texto = f"{ev['strHomeTeam']} vs {ev['strAwayTeam']} ({ev['dateEvent']})"
+            for ev in all_matches_sorted:
+                # Mostrar fecha y hora local si es posible
+                dt_local = convertir_hora_elsalvador(ev.get('dateEvent', ''), ev.get('strTime', ''))
+                fecha_str = formatear_dia_local(dt_local) if dt_local else ev.get('dateEvent', 'Fecha?')
+                hora_str = formatear_hora_local(dt_local) if dt_local else ''
+                texto = f"{fecha_str} {hora_str} - {ev['strHomeTeam']} vs {ev['strAwayTeam']}"
                 opciones.append(texto)
                 mapeo[texto] = ev
             sel_match = st.selectbox("Selecciona un partido para cargar", opciones)
@@ -397,7 +399,7 @@ with st.sidebar:
                 
                 st.rerun()
         else:
-            st.info("No hay partidos próximos en esta competición. Puede que la temporada esté finalizada.")
+            st.info("No hay partidos en esta competición para la temporada seleccionada.")
 
 # ============================================================
 # UI PRINCIPAL (RESTO DEL CÓDIGO IGUAL QUE ANTES)
