@@ -49,7 +49,7 @@ def get_team_cup_stats(team_id, cup_matches):
             continue
     return pj, gf, gc
 
-# ========== MEJORAS: nuevas funciones ==========
+# ========== FUNCIONES NUEVAS REQUERIDAS ==========
 
 def get_team_last_matches(team_id, limit=10):
     """Obtiene los últimos 'limit' partidos de un equipo (todas competiciones)."""
