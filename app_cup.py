@@ -1,4 +1,3 @@
-# app_cup.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -273,8 +272,8 @@ with st.sidebar:
     # Diccionario de copas con IDs CORREGIDOS y temporada actualizada a 2025-2026
     copas = {
         "🏆 Champions League": {"id": 4480, "season_default": "2025-2026"},
-        "🏆 Europa League": {"id": 4481, "season_default": "2025-2026"},       # <--- ID CORREGIDO
-        "🏆 Conference League": {"id": 5071, "season_default": "2025-2026"},   # <--- ID CORREGIDO
+        "🏆 Europa League": {"id": 4481, "season_default": "2025-2026"},
+        "🏆 Conference League": {"id": 5071, "season_default": "2025-2026"},
         "🇪🇸 Copa del Rey": {"id": 4483, "season_default": "2025-2026"},
         "🇬🇧 FA Cup": {"id": 4490, "season_default": "2025-2026"},
         "🇮🇹 Coppa Italia": {"id": 4485, "season_default": "2025-2026"},
@@ -310,90 +309,139 @@ with st.sidebar:
             st.error(f"❌ No se encontraron partidos para {copa_sel} en la temporada {season}. Prueba otra temporada (ej. 2024-2025 o 2025).")
         st.rerun()
 
-    # ========== MOSTRAR TODOS LOS PARTIDOS SIN FILTRAR ==========
+    # ========== MOSTRAR PARTIDOS DE LOS PRÓXIMOS 2 DÍAS ==========
     if st.session_state.get('cup_matches_cached'):
         st.markdown("---")
-        st.markdown("### 📋 Todos los partidos sincronizados")
+        st.markdown("### 📅 Partidos de los próximos 2 días")
+        
         all_matches = st.session_state['cup_matches_cached']
         if all_matches:
-            try:
-                all_matches_sorted = sorted(all_matches, key=lambda x: x.get('dateEvent', ''))
-            except:
-                all_matches_sorted = all_matches
-            opciones = []
-            mapeo = {}
-            for ev in all_matches_sorted:
+            # Obtener fecha actual en zona horaria local
+            tz_sv = pytz.timezone('America/El_Salvador')
+            hoy_local = datetime.now(tz_sv).date()
+            # Calcular límite: hoy + 2 días
+            limite = hoy_local + pd.Timedelta(days=2)
+            
+            # Filtrar partidos cuya fecha local esté entre hoy y límite (inclusive)
+            partidos_proximos = []
+            for ev in all_matches:
                 dt_local = convertir_hora_elsalvador(ev.get('dateEvent', ''), ev.get('strTime', ''))
-                fecha_str = formatear_dia_local(dt_local) if dt_local else ev.get('dateEvent', 'Fecha?')
-                hora_str = formatear_hora_local(dt_local) if dt_local else ''
-                texto = f"{fecha_str} {hora_str} - {ev['strHomeTeam']} vs {ev['strAwayTeam']}"
-                opciones.append(texto)
-                mapeo[texto] = ev
-            sel_match = st.selectbox("Selecciona un partido para cargar", opciones)
-            evento = mapeo[sel_match]
-
-            if st.button("📊 Cargar Estadísticas", use_container_width=True):
-                m = evento
-                st.session_state['nl_auto'], st.session_state['nv_auto'] = m['strHomeTeam'], m['strAwayTeam']
-                pj_l, gf_l, gc_l = get_team_cup_stats(m['idHomeTeam'], st.session_state['cup_matches_cached'])
-                pj_v, gf_v, gc_v = get_team_cup_stats(m['idAwayTeam'], st.session_state['cup_matches_cached'])
+                if dt_local is not None:
+                    fecha_local = dt_local.date()
+                    if hoy_local <= fecha_local <= limite:
+                        partidos_proximos.append(ev)
+                else:
+                    # Si no se pudo convertir, intentar con la fecha original como fallback
+                    try:
+                        fecha_str = ev.get('dateEvent', '')
+                        if fecha_str:
+                            fecha_naive = datetime.strptime(fecha_str, '%Y-%m-%d').date()
+                            if hoy_local <= fecha_naive <= limite:
+                                partidos_proximos.append(ev)
+                    except:
+                        pass
+            
+            if partidos_proximos:
+                # Ordenar por fecha y hora
+                try:
+                    partidos_proximos.sort(key=lambda x: (x.get('dateEvent', ''), x.get('strTime', '')))
+                except:
+                    pass
                 
-                prom_media = st.session_state['p_copa_auto'] / 2
-                tl_stats = {'intPlayed': max(pj_l, 1), 'intGoalsFor': gf_l, 'intGoalsAgainst': gc_l}
-                tv_stats = {'intPlayed': max(pj_v, 1), 'intGoalsFor': gf_v, 'intGoalsAgainst': gc_v}
-                st.session_state['tl_stats'] = tl_stats
-                st.session_state['tv_stats'] = tv_stats
+                opciones = []
+                mapeo = {}
+                for ev in partidos_proximos:
+                    dt_local = convertir_hora_elsalvador(ev.get('dateEvent', ''), ev.get('strTime', ''))
+                    if dt_local:
+                        fecha_str = formatear_dia_local(dt_local)
+                        hora_str = formatear_hora_local(dt_local)
+                        texto = f"{fecha_str} {hora_str} - {ev['strHomeTeam']} vs {ev['strAwayTeam']}"
+                    else:
+                        texto = f"{ev['dateEvent']} - {ev['strHomeTeam']} vs {ev['strAwayTeam']}"
+                    opciones.append(texto)
+                    mapeo[texto] = ev
                 
-                max_pts = max(pj_l*3, pj_v*3)
-                elo_l = calc_elo(gf_l - gc_l, max_pts, 0)
-                elo_v = calc_elo(gf_v - gc_v, max_pts, 0)
-                pit_l = calc_fuerza_pitagorica(gf_l, gc_l)
-                pit_v = calc_fuerza_pitagorica(gf_v, gc_v)
-                home_adv = 1.1
-                away_adv = 0.9
-                xg_l_base = (gf_l / max(pj_l,1)) * elo_l * pit_l
-                xg_v_base = (gf_v / max(pj_v,1)) * elo_v * pit_v
-                st.session_state['lgf_auto'] = xg_l_base * home_adv
-                st.session_state['vgf_auto'] = xg_v_base * away_adv
-                st.session_state['lgc_auto'] = (gc_l / max(pj_l,1)) / max(elo_v, 0.1)
-                st.session_state['vgc_auto'] = (gc_v / max(pj_v,1)) / max(elo_l, 0.1)
-                st.session_state['elo_l'] = elo_l
-                st.session_state['elo_v'] = elo_v
-                st.session_state['pit_l'] = pit_l
-                st.session_state['pit_v'] = pit_v
-                st.session_state['prom_media_copa'] = prom_media
+                sel_match = st.selectbox("Selecciona un partido", opciones)
+                evento = mapeo[sel_match]
                 
-                recent_l = get_recent_form(m['idHomeTeam'])
-                recent_v = get_recent_form(m['idAwayTeam'])
-                (gd_h_3, gd_h_5, gd_h_10, avg_gf_h_3, avg_gc_h_3, btts_h_5,
-                 win_streak_h, loss_streak_h, racha_h, vol_h, mom_h) = obtener_estadisticas_avanzadas(m['idHomeTeam'], recent_l)
-                (gd_a_3, gd_a_5, gd_a_10, avg_gf_a_3, avg_gc_a_3, btts_a_5,
-                 win_streak_a, loss_streak_a, racha_a, vol_a, mom_a) = obtener_estadisticas_avanzadas(m['idAwayTeam'], recent_v)
-                
-                st.session_state['gd_h_3'] = gd_h_3
-                st.session_state['gd_a_3'] = gd_a_3
-                st.session_state['gd_h_5'] = gd_h_5
-                st.session_state['gd_a_5'] = gd_a_5
-                st.session_state['gd_h_10'] = gd_h_10
-                st.session_state['gd_a_10'] = gd_a_10
-                st.session_state['avg_gf_h_3'] = avg_gf_h_3
-                st.session_state['avg_gc_h_3'] = avg_gc_h_3
-                st.session_state['avg_gf_a_3'] = avg_gf_a_3
-                st.session_state['avg_gc_a_3'] = avg_gc_a_3
-                st.session_state['btts_h_5'] = btts_h_5
-                st.session_state['btts_a_5'] = btts_a_5
-                st.session_state['win_streak_h'] = win_streak_h
-                st.session_state['loss_streak_h'] = loss_streak_h
-                st.session_state['win_streak_a'] = win_streak_a
-                st.session_state['loss_streak_a'] = loss_streak_a
-                st.session_state['racha_esp_local'] = racha_h
-                st.session_state['racha_esp_visita'] = racha_a
-                st.session_state['volatilidad_local'] = vol_h
-                st.session_state['volatilidad_visita'] = vol_a
-                st.session_state['momentum_local'] = mom_h
-                st.session_state['momentum_visita'] = mom_a
-                
-                st.rerun()
+                if st.button("📊 Cargar Estadísticas", use_container_width=True):
+                    m = evento
+                    st.session_state['nl_auto'], st.session_state['nv_auto'] = m['strHomeTeam'], m['strAwayTeam']
+                    pj_l, gf_l, gc_l = get_team_cup_stats(m['idHomeTeam'], st.session_state['cup_matches_cached'])
+                    pj_v, gf_v, gc_v = get_team_cup_stats(m['idAwayTeam'], st.session_state['cup_matches_cached'])
+                    
+                    prom_media = st.session_state['p_copa_auto'] / 2
+                    tl_stats = {'intPlayed': max(pj_l, 1), 'intGoalsFor': gf_l, 'intGoalsAgainst': gc_l}
+                    tv_stats = {'intPlayed': max(pj_v, 1), 'intGoalsFor': gf_v, 'intGoalsAgainst': gc_v}
+                    st.session_state['tl_stats'] = tl_stats
+                    st.session_state['tv_stats'] = tv_stats
+                    
+                    max_pts = max(pj_l*3, pj_v*3)
+                    elo_l = calc_elo(gf_l - gc_l, max_pts, 0)
+                    elo_v = calc_elo(gf_v - gc_v, max_pts, 0)
+                    pit_l = calc_fuerza_pitagorica(gf_l, gc_l)
+                    pit_v = calc_fuerza_pitagorica(gf_v, gc_v)
+                    home_adv = 1.1
+                    away_adv = 0.9
+                    xg_l_base = (gf_l / max(pj_l,1)) * elo_l * pit_l
+                    xg_v_base = (gf_v / max(pj_v,1)) * elo_v * pit_v
+                    st.session_state['lgf_auto'] = xg_l_base * home_adv
+                    st.session_state['vgf_auto'] = xg_v_base * away_adv
+                    st.session_state['lgc_auto'] = (gc_l / max(pj_l,1)) / max(elo_v, 0.1)
+                    st.session_state['vgc_auto'] = (gc_v / max(pj_v,1)) / max(elo_l, 0.1)
+                    st.session_state['elo_l'] = elo_l
+                    st.session_state['elo_v'] = elo_v
+                    st.session_state['pit_l'] = pit_l
+                    st.session_state['pit_v'] = pit_v
+                    st.session_state['prom_media_copa'] = prom_media
+                    
+                    recent_l = get_recent_form(m['idHomeTeam'])
+                    recent_v = get_recent_form(m['idAwayTeam'])
+                    (gd_h_3, gd_h_5, gd_h_10, avg_gf_h_3, avg_gc_h_3, btts_h_5,
+                     win_streak_h, loss_streak_h, racha_h, vol_h, mom_h) = obtener_estadisticas_avanzadas(m['idHomeTeam'], recent_l)
+                    (gd_a_3, gd_a_5, gd_a_10, avg_gf_a_3, avg_gc_a_3, btts_a_5,
+                     win_streak_a, loss_streak_a, racha_a, vol_a, mom_a) = obtener_estadisticas_avanzadas(m['idAwayTeam'], recent_v)
+                    
+                    st.session_state['gd_h_3'] = gd_h_3
+                    st.session_state['gd_a_3'] = gd_a_3
+                    st.session_state['gd_h_5'] = gd_h_5
+                    st.session_state['gd_a_5'] = gd_a_5
+                    st.session_state['gd_h_10'] = gd_h_10
+                    st.session_state['gd_a_10'] = gd_a_10
+                    st.session_state['avg_gf_h_3'] = avg_gf_h_3
+                    st.session_state['avg_gc_h_3'] = avg_gc_h_3
+                    st.session_state['avg_gf_a_3'] = avg_gf_a_3
+                    st.session_state['avg_gc_a_3'] = avg_gc_a_3
+                    st.session_state['btts_h_5'] = btts_h_5
+                    st.session_state['btts_a_5'] = btts_a_5
+                    st.session_state['win_streak_h'] = win_streak_h
+                    st.session_state['loss_streak_h'] = loss_streak_h
+                    st.session_state['win_streak_a'] = win_streak_a
+                    st.session_state['loss_streak_a'] = loss_streak_a
+                    st.session_state['racha_esp_local'] = racha_h
+                    st.session_state['racha_esp_visita'] = racha_a
+                    st.session_state['volatilidad_local'] = vol_h
+                    st.session_state['volatilidad_visita'] = vol_a
+                    st.session_state['momentum_local'] = mom_h
+                    st.session_state['momentum_visita'] = mom_a
+                    
+                    st.rerun()
+            else:
+                st.info("No hay partidos programados en los próximos 2 días para esta competición.")
+                # Opcional: mostrar un expander con todos los partidos si el usuario quiere verlos
+                with st.expander("Ver todos los partidos sincronizados"):
+                    try:
+                        all_sorted = sorted(all_matches, key=lambda x: x.get('dateEvent', ''))
+                    except:
+                        all_sorted = all_matches
+                    for ev in all_sorted[:20]:  # mostrar hasta 20 para no saturar
+                        dt_local = convertir_hora_elsalvador(ev.get('dateEvent', ''), ev.get('strTime', ''))
+                        if dt_local:
+                            fecha_str = formatear_dia_local(dt_local)
+                            hora_str = formatear_hora_local(dt_local)
+                            st.write(f"{fecha_str} {hora_str} - {ev['strHomeTeam']} vs {ev['strAwayTeam']}")
+                        else:
+                            st.write(f"{ev['dateEvent']} - {ev['strHomeTeam']} vs {ev['strAwayTeam']}")
         else:
             st.info("No hay partidos en esta competición para la temporada seleccionada.")
 
