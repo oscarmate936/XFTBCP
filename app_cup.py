@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# INICIALIZACIÓN DEL ESTADO DE SESIÓN (solo variables usadas)
+# INICIALIZACIÓN DEL ESTADO DE SESIÓN
 # ============================================================
 if 'p_copa_auto' not in st.session_state:
     st.session_state['p_copa_auto'] = 2.5
@@ -148,7 +148,7 @@ def obtener_estadisticas_avanzadas_copa(team_id, cup_matches, max_partidos=10, p
     # Ordenar por fecha
     team_matches.sort(key=lambda x: x['dateEvent'])
     if not team_matches:
-        return (0, 0, 0, 0.0, 0.0, 0.0, 0, 0, 0.0, 0.0, 0.0)
+        return (0, 0, 0, 0.0, 0.0, 0.0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
     
     gf_list = []
     gc_list = []
@@ -173,7 +173,7 @@ def obtener_estadisticas_avanzadas_copa(team_id, cup_matches, max_partidos=10, p
             continue
     
     if not gf_list:
-        return (0, 0, 0, 0.0, 0.0, 0.0, 0, 0, 0.0, 0.0, 0.0)
+        return (0, 0, 0, 0.0, 0.0, 0.0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
     
     n = len(gf_list)
     gd_3 = sum(gf_list[:3]) - sum(gc_list[:3]) if n >= 3 else 0
@@ -209,7 +209,6 @@ def obtener_estadisticas_avanzadas_copa(team_id, cup_matches, max_partidos=10, p
     # También necesitamos la defensa (xg recibido)
     def_xg, _, _ = calcular_stats_avanzadas_copa(gc_list, fechas, prom_media_liga)
     
-    # Guardamos en session_state también los valores de elo y pitagórica (se calcularán aparte)
     return (gd_3, gd_5, gd_10, avg_gf_3, avg_gc_3, btts_ratio,
             win_streak, loss_streak, racha, vol, mom, xg, def_xg)
 
@@ -226,7 +225,6 @@ def calcular_caracteristicas_cerebro_cup(team_id_local, team_id_visitante, cup_m
          team_id_visitante, cup_matches, prom_media_liga=prom_media_copa)
     
     # Construir historial de partidos para rating Colley (todos los partidos de la copa hasta la fecha)
-    # Necesitamos el índice de equipos y los resultados
     all_teams = set()
     for ev in cup_matches:
         all_teams.add(ev['strHomeTeam'])
@@ -252,8 +250,6 @@ def calcular_caracteristicas_cerebro_cup(team_id_local, team_id_visitante, cup_m
     ventaja_visita = xg_v * (rating_visit + 0.5)
     
     # Elo simple (simulado similar a entrenamiento)
-    # En entrenamiento se usaba Elo secuencial, aquí lo aproximamos con la diferencia de goles
-    # pero para mantener coherencia usamos calc_elo sobre los datos de copa
     pj_l, gf_l, gc_l = get_team_cup_stats(team_id_local, cup_matches)
     pj_v, gf_v, gc_v = get_team_cup_stats(team_id_visitante, cup_matches)
     max_pts = max(pj_l*3, pj_v*3)
@@ -434,7 +430,7 @@ with st.sidebar:
             st.info("No hay partidos en esta competición para la temporada seleccionada.")
 
 # ============================================================
-# UI PRINCIPAL (igual que antes, solo se ajusta la lógica del cerebro)
+# UI PRINCIPAL
 # ============================================================
 st.markdown("<h1 class='app-title'>DeepXG <span>Cup Predictor</span></h1>", unsafe_allow_html=True)
 st.markdown("<p class='app-subtitle'>MOTOR ESTADÍSTICO AVANZADO PARA TORNEOS DE ELIMINACIÓN</p>", unsafe_allow_html=True)
@@ -513,7 +509,6 @@ if analizar_btn:
             # Usar las características ya calculadas y almacenadas en session_state (por el botón "Cargar Estadísticas")
             # Si no existen, las calculamos ahora
             if 'ventaja_local' not in st.session_state:
-                # Intentar obtener ids de equipo desde los nombres (requiere mapeo, pero simplificamos)
                 st.warning("No se han cargado estadísticas previas. Por favor, selecciona un partido de la lista y haz clic en 'Cargar Estadísticas'.")
                 cerebro = None
             else:
@@ -592,7 +587,7 @@ if analizar_btn:
         else:
             f_adv_l = st.session_state.get('h_adv_l', 1.1)
             f_adv_v = st.session_state.get('v_adv_v', 0.9)
-        # Fórmula corregida para mayor claridad (equivalente a la original)
+        # Fórmula corregida para mayor claridad
         xg_l_final = lgf * f_adv_l
         xg_v_final = vgf * f_adv_v
         if adjustments:
