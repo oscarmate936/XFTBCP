@@ -85,10 +85,11 @@ for key, default in [
         st.session_state[key] = default
 
 # ============================================================
-# CARGA DEL CEREBRO (ENSEMBLE)
+# CARGA DEL CEREBRO (ENSEMBLE) - PRIORIDAD PARA COPAS
 # ============================================================
 cerebro_path = None
-for path in ['quantum_cerebro_final.pkl', 'quantum_cerebro_ensemble_light.pkl', 'quantum_cerebro_ensemble.pkl']:
+# Buscar primero el cerebro específico para copas
+for path in ['quantum_cerebro_cup_final.pkl', 'quantum_cerebro_final.pkl', 'quantum_cerebro_ensemble_light.pkl']:
     if os.path.exists(path):
         cerebro_path = path
         break
@@ -99,11 +100,16 @@ if cerebro_path:
         st.session_state['cerebro_ensemble'] = cerebro_ensemble
         st.session_state['cerebro_path'] = cerebro_path
         logger.info(f"Cerebro cargado desde {cerebro_path}")
+        if 'cup' in cerebro_path:
+            st.success("🧠 Usando cerebro especializado en COPAS")
+        else:
+            st.info("🧠 Usando cerebro general (ligas) - puede ser menos preciso en copas")
     except Exception as e:
         st.session_state['cerebro_ensemble'] = None
         st.warning(f"Error cargando cerebro ({cerebro_path}): {e}")
 else:
     st.session_state['cerebro_ensemble'] = None
+    st.info("ℹ️ No se encontró archivo de cerebro. Se usará el motor matemático.")
 
 apply_custom_css()
 st.set_page_config(page_title="DeepXG Cup Predictor", layout="wide", initial_sidebar_state="expanded")
@@ -269,7 +275,6 @@ with st.sidebar:
     st.markdown("<h3 style='color:var(--primary); font-weight:700; margin-bottom:0;'>🏆 Data Hub - Copas</h3>", unsafe_allow_html=True)
     st.markdown("<p style='font-size:0.7rem; color:var(--text-sub); margin-bottom:1rem;'>Sincroniza torneos de eliminación directa</p>", unsafe_allow_html=True)
 
-    # Diccionario de copas con IDs CORREGIDOS y temporada actualizada a 2025-2026
     copas = {
         "🏆 Champions League": {"id": 4480, "season_default": "2025-2026"},
         "🏆 Europa League": {"id": 4481, "season_default": "2025-2026"},
@@ -285,7 +290,6 @@ with st.sidebar:
     copa_sel = st.selectbox("Elegir Copa", list(copas.keys()))
     cup_info = copas[copa_sel]
     cup_id = cup_info["id"]
-    
     season = st.text_input("Temporada (ej. 2025-2026 o 2025)", value=cup_info["season_default"])
 
     if st.button("🔄 Sincronizar Datos", use_container_width=True):
@@ -309,20 +313,14 @@ with st.sidebar:
             st.error(f"❌ No se encontraron partidos para {copa_sel} en la temporada {season}. Prueba otra temporada (ej. 2024-2025 o 2025).")
         st.rerun()
 
-    # ========== MOSTRAR PARTIDOS DE LOS PRÓXIMOS 2 DÍAS ==========
     if st.session_state.get('cup_matches_cached'):
         st.markdown("---")
         st.markdown("### 📅 Partidos de los próximos 2 días")
-        
         all_matches = st.session_state['cup_matches_cached']
         if all_matches:
-            # Obtener fecha actual en zona horaria local
             tz_sv = pytz.timezone('America/El_Salvador')
             hoy_local = datetime.now(tz_sv).date()
-            # Calcular límite: hoy + 2 días
             limite = hoy_local + pd.Timedelta(days=2)
-            
-            # Filtrar partidos cuya fecha local esté entre hoy y límite (inclusive)
             partidos_proximos = []
             for ev in all_matches:
                 dt_local = convertir_hora_elsalvador(ev.get('dateEvent', ''), ev.get('strTime', ''))
@@ -331,7 +329,6 @@ with st.sidebar:
                     if hoy_local <= fecha_local <= limite:
                         partidos_proximos.append(ev)
                 else:
-                    # Si no se pudo convertir, intentar con la fecha original como fallback
                     try:
                         fecha_str = ev.get('dateEvent', '')
                         if fecha_str:
@@ -340,14 +337,8 @@ with st.sidebar:
                                 partidos_proximos.append(ev)
                     except:
                         pass
-            
             if partidos_proximos:
-                # Ordenar por fecha y hora
-                try:
-                    partidos_proximos.sort(key=lambda x: (x.get('dateEvent', ''), x.get('strTime', '')))
-                except:
-                    pass
-                
+                partidos_proximos.sort(key=lambda x: (x.get('dateEvent', ''), x.get('strTime', '')))
                 opciones = []
                 mapeo = {}
                 for ev in partidos_proximos:
@@ -360,22 +351,18 @@ with st.sidebar:
                         texto = f"{ev['dateEvent']} - {ev['strHomeTeam']} vs {ev['strAwayTeam']}"
                     opciones.append(texto)
                     mapeo[texto] = ev
-                
                 sel_match = st.selectbox("Selecciona un partido", opciones)
                 evento = mapeo[sel_match]
-                
                 if st.button("📊 Cargar Estadísticas", use_container_width=True):
                     m = evento
                     st.session_state['nl_auto'], st.session_state['nv_auto'] = m['strHomeTeam'], m['strAwayTeam']
                     pj_l, gf_l, gc_l = get_team_cup_stats(m['idHomeTeam'], st.session_state['cup_matches_cached'])
                     pj_v, gf_v, gc_v = get_team_cup_stats(m['idAwayTeam'], st.session_state['cup_matches_cached'])
-                    
                     prom_media = st.session_state['p_copa_auto'] / 2
                     tl_stats = {'intPlayed': max(pj_l, 1), 'intGoalsFor': gf_l, 'intGoalsAgainst': gc_l}
                     tv_stats = {'intPlayed': max(pj_v, 1), 'intGoalsFor': gf_v, 'intGoalsAgainst': gc_v}
                     st.session_state['tl_stats'] = tl_stats
                     st.session_state['tv_stats'] = tv_stats
-                    
                     max_pts = max(pj_l*3, pj_v*3)
                     elo_l = calc_elo(gf_l - gc_l, max_pts, 0)
                     elo_v = calc_elo(gf_v - gc_v, max_pts, 0)
@@ -394,14 +381,12 @@ with st.sidebar:
                     st.session_state['pit_l'] = pit_l
                     st.session_state['pit_v'] = pit_v
                     st.session_state['prom_media_copa'] = prom_media
-                    
                     recent_l = get_recent_form(m['idHomeTeam'])
                     recent_v = get_recent_form(m['idAwayTeam'])
                     (gd_h_3, gd_h_5, gd_h_10, avg_gf_h_3, avg_gc_h_3, btts_h_5,
                      win_streak_h, loss_streak_h, racha_h, vol_h, mom_h) = obtener_estadisticas_avanzadas(m['idHomeTeam'], recent_l)
                     (gd_a_3, gd_a_5, gd_a_10, avg_gf_a_3, avg_gc_a_3, btts_a_5,
                      win_streak_a, loss_streak_a, racha_a, vol_a, mom_a) = obtener_estadisticas_avanzadas(m['idAwayTeam'], recent_v)
-                    
                     st.session_state['gd_h_3'] = gd_h_3
                     st.session_state['gd_a_3'] = gd_a_3
                     st.session_state['gd_h_5'] = gd_h_5
@@ -424,17 +409,15 @@ with st.sidebar:
                     st.session_state['volatilidad_visita'] = vol_a
                     st.session_state['momentum_local'] = mom_h
                     st.session_state['momentum_visita'] = mom_a
-                    
                     st.rerun()
             else:
                 st.info("No hay partidos programados en los próximos 2 días para esta competición.")
-                # Opcional: mostrar un expander con todos los partidos si el usuario quiere verlos
                 with st.expander("Ver todos los partidos sincronizados"):
                     try:
                         all_sorted = sorted(all_matches, key=lambda x: x.get('dateEvent', ''))
                     except:
                         all_sorted = all_matches
-                    for ev in all_sorted[:20]:  # mostrar hasta 20 para no saturar
+                    for ev in all_sorted[:20]:
                         dt_local = convertir_hora_elsalvador(ev.get('dateEvent', ''), ev.get('strTime', ''))
                         if dt_local:
                             fecha_str = formatear_dia_local(dt_local)
@@ -446,7 +429,7 @@ with st.sidebar:
             st.info("No hay partidos en esta competición para la temporada seleccionada.")
 
 # ============================================================
-# UI PRINCIPAL (RESTO DEL CÓDIGO IGUAL QUE ANTES)
+# UI PRINCIPAL
 # ============================================================
 st.markdown("<h1 class='app-title'>DeepXG <span>Cup Predictor</span></h1>", unsafe_allow_html=True)
 st.markdown("<p class='app-subtitle'>MOTOR ESTADÍSTICO AVANZADO PARA TORNEOS DE ELIMINACIÓN</p>", unsafe_allow_html=True)
@@ -651,7 +634,6 @@ if analizar_btn:
                         st.markdown(f"- {factor}: {value*100:.0f}%")
             st.markdown(f"**Ajustes:** xG × {adjustments['xg_factor']:.2f} | Empate +{adjustments['draw_boost']*100:.0f}%")
 
-    # =================== PESTAÑAS (MERCADOS COMPLETOS) ===================
     t1, t2, t3, t4, t5, t6 = st.tabs(["🥅 Goles", "📊 1X2", "🛡️ Doble O", "🎲 Simulador", "🧩 Matriz", "🕵️ Backtest"])
 
     with t1:
