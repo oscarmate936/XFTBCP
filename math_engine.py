@@ -136,4 +136,4 @@ class MotorMatematico:
                 "CS_V": (sim_h == 0).mean() * 100,
                 "GOLEADA": (np.abs(sim_h - sim_v) >= 3).mean() * 100
             }
-        }
+        } 
