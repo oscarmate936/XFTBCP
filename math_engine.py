@@ -6,16 +6,20 @@ from scipy.optimize import minimize
 from collections import Counter
 
 class MotorMatematico:
-    def __init__(self, league_avg=2.5, draw_rate_real=0.25, liga_id=None):
+    def __init__(self, league_avg=2.5, draw_rate_real=0.25, liga_id=None, context_importance=0.0):
         self.liga_id = liga_id
+        self.context_importance = context_importance
         if liga_id and f'rho_{liga_id}' in st.session_state:
             self.rho = st.session_state[f'rho_{liga_id}']
         else:
             self.rho = self.optimizar_rho(draw_rate_real, league_avg)
             if liga_id:
                 st.session_state[f'rho_{liga_id}'] = self.rho
+        # Ajuste de rho según importancia del partido (más importancia, menos correlación)
+        self.rho = self.rho * (1 - 0.3 * context_importance)
         self.pi_l = 0.06
         self.pi_v = 0.09
+        self.dixon_coles_tau = 0.1  # parámetro de corrección para bajas frecuencias
 
     def optimizar_rho(self, empates_reales_pct, prom_liga):
         l_prom = max(0.1, prom_liga / 2)
@@ -43,13 +47,14 @@ class MotorMatematico:
         zip_v[0] += self.pi_v
         matriz = np.outer(zip_l, zip_v)
         tau = self.rho
+        # Corrección Dixon-Coles para resultados 0-0, 1-0, 0-1, 1-1
         if l1 > 0 and l2 > 0:
-            matriz[0,0] *= max(0, 1 - l1 * l2 * tau)
+            matriz[0,0] *= max(0, 1 - l1 * l2 * tau + self.dixon_coles_tau)
             if size > 1:
-                matriz[0,1] *= max(0, 1 + l1 * tau)
-                matriz[1,0] *= max(0, 1 + l2 * tau)
+                matriz[0,1] *= max(0, 1 + l1 * tau - self.dixon_coles_tau)
+                matriz[1,0] *= max(0, 1 + l2 * tau - self.dixon_coles_tau)
             if size > 1:
-                matriz[1,1] *= max(0, 1 - tau)
+                matriz[1,1] *= max(0, 1 - tau + self.dixon_coles_tau)
         total = matriz.sum()
         if total == 0:
             return np.ones((size, size)) / (size*size)
