@@ -49,6 +49,7 @@ def get_team_cup_stats(team_id, cup_matches):
             continue
     return pj, gf, gc
 
+# Funciones auxiliares (para mantener compatibilidad)
 def get_league_data(league_id, format_type="split"):
     season = "2025-2026" if format_type == "split" else "2026"
     data = call_api("lookuptable.php", f"?l={league_id}&s={season}")
