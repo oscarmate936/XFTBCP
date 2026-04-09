@@ -32,19 +32,6 @@ def render_outcome_card(label, prob, ev=None, kelly=0, color="var(--emerald)"):
     html += '</div>'
     st.markdown(html, unsafe_allow_html=True)
 
-def render_metric_card(title, value, subtitle=None, icon="📊", color="var(--primary)"):
-    st.markdown(
-        f'''
-        <div class="metric-card">
-            <div class="metric-icon" style="color:{color};">{icon}</div>
-            <div class="metric-title">{title}</div>
-            <div class="metric-value">{value}</div>
-            {f'<div class="metric-subtitle">{subtitle}</div>' if subtitle else ''}
-        </div>
-        ''',
-        unsafe_allow_html=True,
-    )
-
 def apply_custom_css():
     st.markdown(
         """
