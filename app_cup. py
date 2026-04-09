@@ -773,4 +773,4 @@ if analizar_btn:
         st.markdown('<div class="premium-card">', unsafe_allow_html=True)
         st.markdown('<div class="section-header">🕵️ Backtest</div>', unsafe_allow_html=True)
         st.info("El backtest para copas requiere partidos históricos de la misma competición. Sincroniza los datos y luego implementa la lógica similar a la versión de liga.")
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True) 
