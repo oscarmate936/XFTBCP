@@ -336,16 +336,13 @@ with st.sidebar:
                 
                 if pj_l == 0 or pj_v == 0:
                     st.warning("Uno de los equipos no tiene partidos en esta copa. Se usarán valores por defecto.")
-                    # Usar forma reciente de todas las competiciones
                     recent_l = get_recent_form(m['idHomeTeam'])
                     recent_v = get_recent_form(m['idAwayTeam'])
-                    # Cálculo simplificado
                     prom_media = st.session_state['p_copa_auto'] / 2
                     tl_stats = {'intPlayed': max(pj_l, 1), 'intGoalsFor': gf_l, 'intGoalsAgainst': gc_l}
                     tv_stats = {'intPlayed': max(pj_v, 1), 'intGoalsFor': gf_v, 'intGoalsAgainst': gc_v}
                     st.session_state['tl_stats'] = tl_stats
                     st.session_state['tv_stats'] = tv_stats
-                    # Calcular Elo y Pitagórica
                     max_pts = max(pj_l*3, pj_v*3)
                     elo_l = calc_elo(gf_l - gc_l, max_pts, 0)
                     elo_v = calc_elo(gf_v - gc_v, max_pts, 0)
@@ -364,7 +361,6 @@ with st.sidebar:
                     st.session_state['pit_l'] = pit_l
                     st.session_state['pit_v'] = pit_v
                     st.session_state['prom_media_copa'] = prom_media
-                    # Stats avanzadas desde forma reciente
                     (gd_h_3, gd_h_5, gd_h_10, avg_gf_h_3, avg_gc_h_3, btts_h_5,
                      win_streak_h, loss_streak_h, racha_h, vol_h, mom_h) = obtener_estadisticas_avanzadas(m['idHomeTeam'], recent_l)
                     (gd_a_3, gd_a_5, gd_a_10, avg_gf_a_3, avg_gc_a_3, btts_a_5,
@@ -415,7 +411,6 @@ with st.sidebar:
                     st.session_state['pit_l'] = pit_l
                     st.session_state['pit_v'] = pit_v
                     st.session_state['prom_media_copa'] = prom_media
-                    # Stats avanzadas desde forma reciente (todas las competiciones)
                     recent_l = get_recent_form(m['idHomeTeam'])
                     recent_v = get_recent_form(m['idAwayTeam'])
                     (gd_h_3, gd_h_5, gd_h_10, avg_gf_h_3, avg_gc_h_3, btts_h_5,
@@ -497,7 +492,6 @@ with st.container():
     with odd_cols[2]:
         o2 = st.number_input("Visita (2)", 1.0, 50.0, 3.2, step=0.1)
 
-    # Ronda actual (para el contexto)
     ronda = st.text_input("Ronda actual (ej. Semifinal)", value="Cuartos")
 
     analizar_btn = st.button("🚀 PROCESAR PREDICCIÓN", use_container_width=True)
@@ -507,7 +501,6 @@ if analizar_btn:
     res = None
     adjustments = None
 
-    # Análisis de contexto de copa
     if st.session_state.get('cup_matches_cached') and st.session_state.get('tl_stats') is not None:
         try:
             analyzer = CupContextAnalyzer(
@@ -523,7 +516,6 @@ if analizar_btn:
             logger.error(f"Error en análisis de contexto de copa: {e}")
             adjustments = None
 
-    # Predicción con cerebro (si existe)
     cerebro = st.session_state.get('cerebro_ensemble')
     if cerebro is not None and st.session_state.get('tl_stats') is not None:
         try:
@@ -532,7 +524,6 @@ if analizar_btn:
 
             tl = st.session_state['tl_stats']
             tv = st.session_state['tv_stats']
-            # Asegurar claves necesarias
             tl['intPoints'] = 0
             tv['intPoints'] = 0
 
@@ -610,7 +601,6 @@ if analizar_btn:
             st.warning(f"⚠️ Error usando cerebro: {e}. Usando motor matemático.")
             cerebro = None
 
-    # Si no hay cerebro, usar motor matemático directamente
     if res is None:
         draw_rate = st.session_state.get('draw_rate_auto', 0.25)
         motor = MotorMatematico(p_copa, draw_rate, liga_id=None)
@@ -646,7 +636,6 @@ if analizar_btn:
         st.error("❌ No se pudo generar la predicción. Revisa los datos de entrada.")
         st.stop()
 
-    # Panel de contexto
     if adjustments:
         with st.expander("🏆 Análisis de Contexto de Copa", expanded=True):
             col1, col2 = st.columns([1, 2])
@@ -660,12 +649,6 @@ if analizar_btn:
                         st.markdown(f"- {factor}: {value*100:.0f}%")
             st.markdown(f"**Ajustes:** xG × {adjustments['xg_factor']:.2f} | Empate +{adjustments['draw_boost']*100:.0f}%")
 
-    # =================== RESULTADOS (MERCADOS COMPLETOS) ===================
-    # (Todo el código de las pestañas se copia exactamente igual que en la versión de liga)
-    # Para no repetir 500 líneas, asumo que aquí va el bloque de las pestañas que ya tienes.
-    # A continuación pongo un resumen funcional, pero debes reemplazarlo por tu bloque original.
-
-    # ---------- Pestañas ----------
     t1, t2, t3, t4, t5, t6 = st.tabs(["🥅 Goles", "📊 1X2", "🛡️ Doble O", "🎲 Simulador", "🧩 Matriz", "🕵️ Backtest"])
 
     with t1:
@@ -791,5 +774,3 @@ if analizar_btn:
         st.markdown('<div class="section-header">🕵️ Backtest</div>', unsafe_allow_html=True)
         st.info("El backtest para copas requiere partidos históricos de la misma competición. Sincroniza los datos y luego implementa la lógica similar a la versión de liga.")
         st.markdown('</div>', unsafe_allow_html=True)
-
-    # Fin de pestañas
