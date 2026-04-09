@@ -7,7 +7,7 @@ from fuzzywuzzy import process
 from collections import Counter
 import joblib
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import logging
 
@@ -96,7 +96,6 @@ for key, default in [
 # CARGA DEL CEREBRO (ENSEMBLE) - PRIORIDAD PARA COPAS
 # ============================================================
 cerebro_path = None
-# Buscar primero el cerebro específico para copas
 for path in ['quantum_cerebro_cup_final.pkl', 'quantum_cerebro_final.pkl', 'quantum_cerebro_ensemble_light.pkl']:
     if os.path.exists(path):
         cerebro_path = path
@@ -277,6 +276,104 @@ def obtener_estadisticas_avanzadas(team_id, events, max_partidos=10):
             win_streak, loss_streak, racha, vol, mom)
 
 # ============================================================
+# BACKTEST FUNCTION
+# ============================================================
+def run_backtest(matches, prom_goles_total, draw_rate_total, cerebro=None):
+    """
+    Ejecuta backtest sobre partidos pasados (sin usar información futura).
+    Retorna dict con métricas.
+    """
+    if len(matches) < 10:
+        return None
+    
+    # Ordenar por fecha
+    matches_sorted = sorted([m for m in matches if m.get('dateEvent')], key=lambda x: x['dateEvent'])
+    
+    correct_1x2 = 0
+    correct_over25 = 0
+    correct_btts = 0
+    total = 0
+    
+    # Para evitar look-ahead, vamos iterando y usando solo partidos anteriores
+    for i, match in enumerate(matches_sorted):
+        if i < 5:  # necesitamos al menos 5 partidos previos para estadísticas
+            continue
+        
+        # Fecha del partido
+        try:
+            match_date = datetime.strptime(match['dateEvent'], '%Y-%m-%d').date()
+        except:
+            continue
+        
+        # Partidos anteriores (solo hasta esta fecha)
+        past_matches = matches_sorted[:i]
+        
+        # Estadísticas acumuladas de los equipos hasta antes de este partido
+        team_home = match['idHomeTeam']
+        team_away = match['idAwayTeam']
+        
+        # Calcular stats solo con partidos anteriores
+        gf_l = sum(int(ev['intHomeScore']) for ev in past_matches if ev['idHomeTeam'] == team_home)
+        gf_l += sum(int(ev['intAwayScore']) for ev in past_matches if ev['idAwayTeam'] == team_home)
+        gc_l = sum(int(ev['intAwayScore']) for ev in past_matches if ev['idHomeTeam'] == team_home)
+        gc_l += sum(int(ev['intHomeScore']) for ev in past_matches if ev['idAwayTeam'] == team_home)
+        pj_l = len([ev for ev in past_matches if ev['idHomeTeam'] == team_home or ev['idAwayTeam'] == team_home])
+        
+        gf_v = sum(int(ev['intHomeScore']) for ev in past_matches if ev['idHomeTeam'] == team_away)
+        gf_v += sum(int(ev['intAwayScore']) for ev in past_matches if ev['idAwayTeam'] == team_away)
+        gc_v = sum(int(ev['intAwayScore']) for ev in past_matches if ev['idHomeTeam'] == team_away)
+        gc_v += sum(int(ev['intHomeScore']) for ev in past_matches if ev['idAwayTeam'] == team_away)
+        pj_v = len([ev for ev in past_matches if ev['idHomeTeam'] == team_away or ev['idAwayTeam'] == team_away])
+        
+        if pj_l < 3 or pj_v < 3:
+            continue
+        
+        # xG esperados
+        prom_media = prom_goles_total / 2
+        xg_l = (gf_l / max(pj_l,1)) 
+        xg_v = (gf_v / max(pj_v,1))
+        
+        # Usar motor matemático
+        motor = MotorMatematico(prom_goles_total, draw_rate_total, round_name="Backtest")
+        res = motor.procesar(xg_l, xg_v)
+        
+        # Resultado real
+        gh = int(match['intHomeScore'])
+        ga = int(match['intAwayScore'])
+        real = 0 if gh > ga else (1 if gh == ga else 2)
+        pred = np.argmax(res['1X2'])
+        
+        if pred == real:
+            correct_1x2 += 1
+        
+        # Over 2.5
+        total_goles = gh + ga
+        pred_over = res['GOLES'][2.5][0] > 50
+        if (total_goles > 2.5) == pred_over:
+            correct_over25 += 1
+        
+        # BTTS
+        btts_real = (gh > 0 and ga > 0)
+        pred_btts = res['BTTS'][0] > 50
+        if btts_real == pred_btts:
+            correct_btts += 1
+        
+        total += 1
+    
+    if total == 0:
+        return None
+    
+    return {
+        'total': total,
+        'accuracy_1x2': correct_1x2 / total,
+        'accuracy_over25': correct_over25 / total,
+        'accuracy_btts': correct_btts / total,
+        'correct_1x2': correct_1x2,
+        'correct_over25': correct_over25,
+        'correct_btts': correct_btts
+    }
+
+# ============================================================
 # SIDEBAR (SELECCIÓN DE COPA Y SINCRONIZACIÓN)
 # ============================================================
 with st.sidebar:
@@ -328,7 +425,7 @@ with st.sidebar:
         if all_matches:
             tz_sv = pytz.timezone('America/El_Salvador')
             hoy_local = datetime.now(tz_sv).date()
-            limite = hoy_local + pd.Timedelta(days=2)
+            limite = hoy_local + timedelta(days=2)
             partidos_proximos = []
             for ev in all_matches:
                 dt_local = convertir_hora_elsalvador(ev.get('dateEvent', ''), ev.get('strTime', ''))
@@ -418,7 +515,7 @@ with st.sidebar:
                     st.session_state['momentum_local'] = mom_h
                     st.session_state['momentum_visita'] = mom_a
 
-                    # ========== MEJORA: días de descanso ==========
+                    # Días de descanso
                     fecha_partido = datetime.strptime(m['dateEvent'], '%Y-%m-%d').date()
                     all_events_local = get_team_last_matches(m['idHomeTeam'], limit=10)
                     all_events_visitor = get_team_last_matches(m['idAwayTeam'], limit=10)
@@ -459,7 +556,6 @@ with st.container():
     col1, col2 = st.columns([1, 1])
     with col1:
         p_copa = st.number_input("Goles Prom. Copa", 0.5, 5.0, float(st.session_state.get('p_copa_auto', 2.5)), 0.01)
-        # Sliders para ventaja local/visitante (mejora)
         home_adv_slider = st.slider("Ventaja local (factor)", 0.8, 1.3, st.session_state.get('h_adv_l', 1.1), 0.01)
         st.session_state['h_adv_l'] = home_adv_slider
         away_adv_slider = st.slider("Ventaja visitante (factor)", 0.7, 1.2, st.session_state.get('v_adv_v', 0.9), 0.01)
@@ -584,12 +680,10 @@ if analizar_btn:
             prob_local, prob_empate, prob_visita = probas[0]*100, probas[1]*100, probas[2]*100
 
             draw_rate = st.session_state.get('draw_rate_auto', 0.25)
-            # Pasar la ronda al motor para ajuste dinámico del promedio
             motor = MotorMatematico(p_copa, draw_rate, liga_id=None, round_name=ronda)
             xg_l_adj = lgf
             xg_v_adj = vgf
 
-            # Factor de descanso (mejora)
             rest_local = st.session_state.get('rest_days_local', 7)
             rest_visitor = st.session_state.get('rest_days_visitor', 7)
             rest_factor = min(1.2, max(0.8, rest_local / max(1, rest_visitor)))
@@ -629,7 +723,6 @@ if analizar_btn:
         xg_l_final = (lgf/p_copa)*(vgc/p_copa)*p_copa * f_adv_l
         xg_v_final = (vgf/p_copa)*(lgc/p_copa)*p_copa * f_adv_v
 
-        # Factor de descanso
         rest_local = st.session_state.get('rest_days_local', 7)
         rest_visitor = st.session_state.get('rest_days_visitor', 7)
         rest_factor = min(1.2, max(0.8, rest_local / max(1, rest_visitor)))
@@ -674,7 +767,8 @@ if analizar_btn:
                         st.markdown(f"- {factor}: {value*100:.0f}%")
             st.markdown(f"**Ajustes:** xG × {adjustments['xg_factor']:.2f} | Empate +{adjustments['draw_boost']*100:.0f}%")
 
-    t1, t2, t3, t4, t5, t6 = st.tabs(["🥅 Goles", "📊 1X2", "🛡️ Doble O", "🎲 Simulador", "🧩 Matriz", "🕵️ Backtest"])
+    # Pestañas: incluyendo nuevas pestañas de Marcadores y Valor
+    t1, t2, t3, t4, t5, t6, t7 = st.tabs(["🥅 Goles", "📊 1X2", "🛡️ Doble O", "🎲 Simulador", "🧩 Matriz", "🎯 Marcadores", "💎 Valor", "🕵️ Backtest"])
 
     with t1:
         st.markdown('<div class="premium-card">', unsafe_allow_html=True)
@@ -794,8 +888,79 @@ if analizar_btn:
         st.plotly_chart(fig_mat, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
+    # NUEVA PESTAÑA: TRES MARCADORES MÁS PROBABLES
     with t6:
         st.markdown('<div class="premium-card">', unsafe_allow_html=True)
-        st.markdown('<div class="section-header">🕵️ Backtest</div>', unsafe_allow_html=True)
-        st.info("El backtest para copas requiere partidos históricos de la misma competición. Sincroniza los datos y luego implementa la lógica similar a la versión de liga.")
+        st.markdown('<div class="section-header">🎯 Marcadores más probables</div>', unsafe_allow_html=True)
+        top_scores = res['TOP']
+        cols = st.columns(3)
+        for idx, (score, prob) in enumerate(top_scores):
+            with cols[idx]:
+                st.metric(label=f"{score}", value=f"{prob:.2f}%", delta=None)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # NUEVA PESTAÑA: SUGERENCIAS DE VALOR (EV y KELLY)
+    with t7:
+        st.markdown('<div class="premium-card">', unsafe_allow_html=True)
+        st.markdown('<div class="section-header">💎 Apuestas con Valor Estadístico</div>', unsafe_allow_html=True)
+        
+        # Crear DataFrame con sugerencias
+        suggestions = []
+        outcomes = ["Local (1)", "Empate (X)", "Visitante (2)"]
+        for i, outcome in enumerate(outcomes):
+            ev = res['EV'][i]
+            kelly = res['KELLY'][i]
+            prob = res['1X2'][i]
+            cuota = [o1, ox, o2][i]
+            if ev > 0.05:  # EV superior al 5%
+                suggestions.append({
+                    "Mercado": outcome,
+                    "Prob. Modelo": f"{prob:.1f}%",
+                    "Cuota": f"{cuota:.2f}",
+                    "Valor Esperado": f"{ev*100:+.1f}%",
+                    "Kelly Stake": f"{kelly:.1f}%"
+                })
+        
+        # También sugerencias para Over/Under y BTTS si tienen EV positivo (usando cuotas ficticias o simuladas)
+        # Para simplificar, mostramos solo las de 1X2 que ya tenemos EV calculado.
+        if suggestions:
+            df_val = pd.DataFrame(suggestions)
+            st.dataframe(df_val, use_container_width=True, hide_index=True)
+            st.markdown("> **Interpretación:** Valor Esperado (EV) positivo indica que la cuota de la casa es mayor que la probabilidad real estimada. El stake sugerido (Kelly) es la fracción óptima de tu bankroll a arriesgar.")
+        else:
+            st.info("No se detectaron apuestas con valor positivo significativo (EV > 5%).")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # PESTAÑA BACKTEST (AHORA FUNCIONAL)
+    with t8:
+        st.markdown('<div class="premium-card">', unsafe_allow_html=True)
+        st.markdown('<div class="section-header">🕵️ Backtest sobre partidos históricos</div>', unsafe_allow_html=True)
+        
+        if st.session_state.get('cup_matches_cached'):
+            matches = st.session_state['cup_matches_cached']
+            if len(matches) >= 10:
+                with st.spinner("Ejecutando backtest (puede tomar unos segundos)..."):
+                    prom_goles = st.session_state.get('p_copa_auto', 2.5)
+                    draw_rate = st.session_state.get('draw_rate_auto', 0.25)
+                    cerebro = st.session_state.get('cerebro_ensemble')
+                    backtest_result = run_backtest(matches, prom_goles, draw_rate, cerebro)
+                if backtest_result and backtest_result['total'] > 0:
+                    st.markdown(f"**Partidos analizados:** {backtest_result['total']}")
+                    col_m1, col_m2, col_m3 = st.columns(3)
+                    col_m1.metric("Precisión 1X2", f"{backtest_result['accuracy_1x2']*100:.1f}%", f"{backtest_result['correct_1x2']}/{backtest_result['total']}")
+                    col_m2.metric("Precisión Over 2.5", f"{backtest_result['accuracy_over25']*100:.1f}%", f"{backtest_result['correct_over25']}/{backtest_result['total']}")
+                    col_m3.metric("Precisión BTTS", f"{backtest_result['accuracy_btts']*100:.1f}%", f"{backtest_result['correct_btts']}/{backtest_result['total']}")
+                    
+                    # Gráfico de barras comparativo
+                    metrics = ['1X2', 'Over 2.5', 'BTTS']
+                    acc = [backtest_result['accuracy_1x2'], backtest_result['accuracy_over25'], backtest_result['accuracy_btts']]
+                    fig = go.Figure(data=[go.Bar(x=metrics, y=acc, marker_color=['#3B82F6', '#10B981', '#F59E0B'])])
+                    fig.update_layout(title="Rendimiento del modelo en backtest", yaxis_title="Precisión", yaxis_tickformat=".0%", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#94A3B8')
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("No hay suficientes partidos con datos para un backtest confiable (mínimo 10 partidos después de filtro).")
+            else:
+                st.info(f"Se necesitan al menos 10 partidos para un backtest significativo. Actualmente hay {len(matches)} partidos sincronizados.")
+        else:
+            st.info("Primero sincroniza una copa en la barra lateral para poder ejecutar el backtest.")
         st.markdown('</div>', unsafe_allow_html=True)
