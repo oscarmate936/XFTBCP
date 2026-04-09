@@ -767,8 +767,9 @@ if analizar_btn:
                         st.markdown(f"- {factor}: {value*100:.0f}%")
             st.markdown(f"**Ajustes:** xG × {adjustments['xg_factor']:.2f} | Empate +{adjustments['draw_boost']*100:.0f}%")
 
-    # Pestañas: incluyendo nuevas pestañas de Marcadores y Valor
-    t1, t2, t3, t4, t5, t6, t7 = st.tabs(["🥅 Goles", "📊 1X2", "🛡️ Doble O", "🎲 Simulador", "🧩 Matriz", "🎯 Marcadores", "💎 Valor", "🕵️ Backtest"])
+    # Crear las 8 pestañas correctamente
+    tabs = st.tabs(["🥅 Goles", "📊 1X2", "🛡️ Doble O", "🎲 Simulador", "🧩 Matriz", "🎯 Marcadores", "💎 Valor", "🕵️ Backtest"])
+    t1, t2, t3, t4, t5, t6, t7, t8 = tabs
 
     with t1:
         st.markdown('<div class="premium-card">', unsafe_allow_html=True)
@@ -888,7 +889,6 @@ if analizar_btn:
         st.plotly_chart(fig_mat, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # NUEVA PESTAÑA: TRES MARCADORES MÁS PROBABLES
     with t6:
         st.markdown('<div class="premium-card">', unsafe_allow_html=True)
         st.markdown('<div class="section-header">🎯 Marcadores más probables</div>', unsafe_allow_html=True)
@@ -899,12 +899,10 @@ if analizar_btn:
                 st.metric(label=f"{score}", value=f"{prob:.2f}%", delta=None)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # NUEVA PESTAÑA: SUGERENCIAS DE VALOR (EV y KELLY)
     with t7:
         st.markdown('<div class="premium-card">', unsafe_allow_html=True)
         st.markdown('<div class="section-header">💎 Apuestas con Valor Estadístico</div>', unsafe_allow_html=True)
         
-        # Crear DataFrame con sugerencias
         suggestions = []
         outcomes = ["Local (1)", "Empate (X)", "Visitante (2)"]
         for i, outcome in enumerate(outcomes):
@@ -912,7 +910,7 @@ if analizar_btn:
             kelly = res['KELLY'][i]
             prob = res['1X2'][i]
             cuota = [o1, ox, o2][i]
-            if ev > 0.05:  # EV superior al 5%
+            if ev > 0.05:
                 suggestions.append({
                     "Mercado": outcome,
                     "Prob. Modelo": f"{prob:.1f}%",
@@ -920,9 +918,6 @@ if analizar_btn:
                     "Valor Esperado": f"{ev*100:+.1f}%",
                     "Kelly Stake": f"{kelly:.1f}%"
                 })
-        
-        # También sugerencias para Over/Under y BTTS si tienen EV positivo (usando cuotas ficticias o simuladas)
-        # Para simplificar, mostramos solo las de 1X2 que ya tenemos EV calculado.
         if suggestions:
             df_val = pd.DataFrame(suggestions)
             st.dataframe(df_val, use_container_width=True, hide_index=True)
@@ -931,7 +926,6 @@ if analizar_btn:
             st.info("No se detectaron apuestas con valor positivo significativo (EV > 5%).")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # PESTAÑA BACKTEST (AHORA FUNCIONAL)
     with t8:
         st.markdown('<div class="premium-card">', unsafe_allow_html=True)
         st.markdown('<div class="section-header">🕵️ Backtest sobre partidos históricos</div>', unsafe_allow_html=True)
@@ -951,7 +945,6 @@ if analizar_btn:
                     col_m2.metric("Precisión Over 2.5", f"{backtest_result['accuracy_over25']*100:.1f}%", f"{backtest_result['correct_over25']}/{backtest_result['total']}")
                     col_m3.metric("Precisión BTTS", f"{backtest_result['accuracy_btts']*100:.1f}%", f"{backtest_result['correct_btts']}/{backtest_result['total']}")
                     
-                    # Gráfico de barras comparativo
                     metrics = ['1X2', 'Over 2.5', 'BTTS']
                     acc = [backtest_result['accuracy_1x2'], backtest_result['accuracy_over25'], backtest_result['accuracy_btts']]
                     fig = go.Figure(data=[go.Bar(x=metrics, y=acc, marker_color=['#3B82F6', '#10B981', '#F59E0B'])])
