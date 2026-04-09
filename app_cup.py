@@ -52,7 +52,7 @@ if 'vgc_auto' not in st.session_state:
 if 'prom_media_copa' not in st.session_state:
     st.session_state['prom_media_copa'] = 1.25
 
-# Variables para features del cerebro (se llenan al cargar estadísticas)
+# Variables para features del cerebro
 for key in ['gd_h_3', 'gd_a_3', 'gd_h_5', 'gd_a_5', 'gd_h_10', 'gd_a_10',
             'avg_gf_h_3', 'avg_gc_h_3', 'avg_gf_a_3', 'avg_gc_a_3',
             'btts_h_5', 'btts_a_5', 'win_streak_h', 'loss_streak_h',
@@ -63,7 +63,7 @@ for key in ['gd_h_3', 'gd_a_3', 'gd_h_5', 'gd_a_5', 'gd_h_10', 'gd_a_10',
         st.session_state[key] = 0 if 'streak' in key or 'gd_' in key else 0.0
 
 # ============================================================
-# CARGA DEL CEREBRO (ENSEMBLE) - PRIORIDAD PARA COPAS
+# CARGA DEL CEREBRO
 # ============================================================
 cerebro_path = None
 for path in ['quantum_cerebro_cup_final.pkl', 'quantum_cerebro_final.pkl', 'quantum_cerebro_ensemble_light.pkl']:
@@ -132,11 +132,6 @@ def formatear_hora_local(dt):
     return dt.strftime("%H:%M") if dt else "??:??"
 
 def obtener_estadisticas_avanzadas_copa(team_id, cup_matches, max_partidos=10, prom_media_liga=1.25):
-    """
-    Calcula las mismas features que se usaron en el entrenamiento del cerebro de copas,
-    utilizando exclusivamente los partidos de la copa proporcionados.
-    """
-    # Filtrar partidos del equipo
     team_matches = []
     for ev in cup_matches:
         try:
@@ -145,7 +140,6 @@ def obtener_estadisticas_avanzadas_copa(team_id, cup_matches, max_partidos=10, p
                     team_matches.append(ev)
         except:
             continue
-    # Ordenar por fecha
     team_matches.sort(key=lambda x: x['dateEvent'])
     if not team_matches:
         return (0, 0, 0, 0.0, 0.0, 0.0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
@@ -204,19 +198,13 @@ def obtener_estadisticas_avanzadas_copa(team_id, cup_matches, max_partidos=10, p
     pesos = [0.1, 0.15, 0.2, 0.25, 0.3]
     racha = sum(p * w for p, w in zip(pts_list[:5], pesos[:len(pts_list[:5])])) if n >= 5 else np.mean(pts_list) if pts_list else 1.5
     
-    # Usamos la misma función que en entrenamiento para xg, volatilidad, momentum
     xg, vol, mom = calcular_stats_avanzadas_copa(gf_list, fechas, prom_media_liga)
-    # También necesitamos la defensa (xg recibido)
     def_xg, _, _ = calcular_stats_avanzadas_copa(gc_list, fechas, prom_media_liga)
     
     return (gd_3, gd_5, gd_10, avg_gf_3, avg_gc_3, btts_ratio,
             win_streak, loss_streak, racha, vol, mom, xg, def_xg)
 
 def calcular_caracteristicas_cerebro_cup(team_id_local, team_id_visitante, cup_matches, prom_media_copa):
-    """
-    Replica exactamente las features usadas en train_cerebro_cups.py
-    """
-    # Obtener estadísticas avanzadas para local y visitante
     (gd_h_3, gd_h_5, gd_h_10, avg_gf_h_3, avg_gc_h_3, btts_h_5,
      win_streak_h, loss_streak_h, racha_h, vol_h, mom_h, xg_l, def_l) = obtener_estadisticas_avanzadas_copa(
          team_id_local, cup_matches, prom_media_liga=prom_media_copa)
@@ -224,7 +212,6 @@ def calcular_caracteristicas_cerebro_cup(team_id_local, team_id_visitante, cup_m
      win_streak_a, loss_streak_a, racha_a, vol_a, mom_a, xg_v, def_v) = obtener_estadisticas_avanzadas_copa(
          team_id_visitante, cup_matches, prom_media_liga=prom_media_copa)
     
-    # Construir historial de partidos para rating Colley (todos los partidos de la copa hasta la fecha)
     all_teams = set()
     for ev in cup_matches:
         all_teams.add(ev['strHomeTeam'])
@@ -245,11 +232,9 @@ def calcular_caracteristicas_cerebro_cup(team_id_local, team_id_visitante, cup_m
     rating_local = colley_ratings.get(st.session_state['nl_auto'], 0.5)
     rating_visit = colley_ratings.get(st.session_state['nv_auto'], 0.5)
     
-    # Ventaja local y visitante como en entrenamiento
     ventaja_local = xg_l * (rating_local + 0.5)
     ventaja_visita = xg_v * (rating_visit + 0.5)
     
-    # Elo simple (simulado similar a entrenamiento)
     pj_l, gf_l, gc_l = get_team_cup_stats(team_id_local, cup_matches)
     pj_v, gf_v, gc_v = get_team_cup_stats(team_id_visitante, cup_matches)
     max_pts = max(pj_l*3, pj_v*3)
@@ -257,7 +242,6 @@ def calcular_caracteristicas_cerebro_cup(team_id_local, team_id_visitante, cup_m
     elo_v = calc_elo(gf_v - gc_v, max_pts, 0) if pj_v > 0 else 1.0
     elo_diff = elo_l - elo_v
     
-    # Fuerza pitagórica
     pit_l = calc_fuerza_pitagorica(gf_l, gc_l) if pj_l > 0 else 0.5
     pit_v = calc_fuerza_pitagorica(gf_v, gc_v) if pj_v > 0 else 0.5
     
@@ -312,21 +296,30 @@ with st.sidebar:
         with st.spinner(f"Obteniendo partidos de {copa_sel} temporada {season}..."):
             matches = get_cup_matches(cup_id, season)
         if matches:
-            st.session_state['cup_matches_cached'] = matches
+            # Filtrar partidos con marcador válido para cálculos
+            valid_matches = []
             total_goles = 0
             total_partidos = 0
             for m in matches:
                 try:
-                    total_goles += int(m['intHomeScore']) + int(m['intAwayScore'])
-                    total_partidos += 1
+                    if m.get('intHomeScore') is not None and m.get('intAwayScore') is not None:
+                        gh = int(m['intHomeScore'])
+                        ga = int(m['intAwayScore'])
+                        total_goles += gh + ga
+                        total_partidos += 1
+                        valid_matches.append(m)
                 except:
                     continue
-            prom_goles = total_goles / max(1, total_partidos)
-            st.session_state['p_copa_auto'] = round(prom_goles, 2)
-            # Calcular draw_rate real de la copa
-            empates = sum(1 for m in matches if int(m['intHomeScore']) == int(m['intAwayScore']))
-            st.session_state['draw_rate_auto'] = empates / max(1, total_partidos)
-            st.success(f"✅ {len(matches)} partidos sincronizados. Promedio goles: {prom_goles:.2f} | Empates: {st.session_state['draw_rate_auto']:.2%}")
+            if total_partidos == 0:
+                st.error("No se encontraron partidos con resultados válidos.")
+            else:
+                st.session_state['cup_matches_cached'] = valid_matches
+                prom_goles = total_goles / total_partidos
+                st.session_state['p_copa_auto'] = round(prom_goles, 2)
+                # Calcular draw_rate real de la copa
+                empates = sum(1 for m in valid_matches if int(m['intHomeScore']) == int(m['intAwayScore']))
+                st.session_state['draw_rate_auto'] = empates / total_partidos
+                st.success(f"✅ {len(valid_matches)} partidos sincronizados. Promedio goles: {prom_goles:.2f} | Empates: {st.session_state['draw_rate_auto']:.2%}")
         else:
             st.error(f"❌ No se encontraron partidos para {copa_sel} en la temporada {season}. Prueba otra temporada (ej. 2024-2025 o 2025).")
         st.rerun()
@@ -374,7 +367,6 @@ with st.sidebar:
                 if st.button("📊 Cargar Estadísticas", use_container_width=True):
                     m = evento
                     st.session_state['nl_auto'], st.session_state['nv_auto'] = m['strHomeTeam'], m['strAwayTeam']
-                    # Calcular stats generales para la UI
                     pj_l, gf_l, gc_l = get_team_cup_stats(m['idHomeTeam'], st.session_state['cup_matches_cached'])
                     pj_v, gf_v, gc_v = get_team_cup_stats(m['idAwayTeam'], st.session_state['cup_matches_cached'])
                     prom_media = st.session_state['p_copa_auto'] / 2
@@ -384,7 +376,6 @@ with st.sidebar:
                     st.session_state['tv_stats'] = tv_stats
                     st.session_state['prom_media_copa'] = prom_media
                     
-                    # Calcular xG base para inputs manuales
                     max_pts = max(pj_l*3, pj_v*3)
                     elo_l = calc_elo(gf_l - gc_l, max_pts, 0)
                     elo_v = calc_elo(gf_v - gc_v, max_pts, 0)
@@ -399,10 +390,8 @@ with st.sidebar:
                     st.session_state['lgc_auto'] = (gc_l / max(pj_l,1)) / max(elo_v, 0.1)
                     st.session_state['vgc_auto'] = (gc_v / max(pj_v,1)) / max(elo_l, 0.1)
                     
-                    # Obtener features para el cerebro (usando solo partidos de copa)
                     features, (pit_l_val, pit_v_val) = calcular_caracteristicas_cerebro_cup(
                         m['idHomeTeam'], m['idAwayTeam'], st.session_state['cup_matches_cached'], prom_media)
-                    # Guardar en session_state para usarlas después
                     for k, v in features.items():
                         if k in st.session_state:
                             st.session_state[k] = v
@@ -487,7 +476,6 @@ if analizar_btn:
     res = None
     adjustments = None
 
-    # Análisis de contexto de copa
     if st.session_state.get('cup_matches_cached') and st.session_state.get('tl_stats') is not None:
         try:
             analyzer = CupContextAnalyzer(
@@ -506,8 +494,6 @@ if analizar_btn:
     cerebro = st.session_state.get('cerebro_ensemble')
     if cerebro is not None and st.session_state.get('cup_matches_cached') and st.session_state.get('tl_stats') is not None:
         try:
-            # Usar las características ya calculadas y almacenadas en session_state (por el botón "Cargar Estadísticas")
-            # Si no existen, las calculamos ahora
             if 'ventaja_local' not in st.session_state:
                 st.warning("No se han cargado estadísticas previas. Por favor, selecciona un partido de la lista y haz clic en 'Cargar Estadísticas'.")
                 cerebro = None
@@ -533,7 +519,6 @@ if analizar_btn:
                     'win_streak_h': st.session_state['win_streak_h'], 'loss_streak_h': st.session_state['loss_streak_h'],
                     'win_streak_a': st.session_state['win_streak_a'], 'loss_streak_a': st.session_state['loss_streak_a'],
                 }
-                # Agregar probabilidades implícitas de cuotas
                 inv_odds = [1 / max(c, 1.01) for c in [o1, ox, o2]]
                 prob_impl = [p / sum(inv_odds) for p in inv_odds]
                 features['prob_impl_local'] = prob_impl[0]
@@ -549,7 +534,6 @@ if analizar_btn:
                 probas = cerebro['modelo_clasificacion'].predict_proba(X_pred)[0]
                 prob_local, prob_empate, prob_visita = probas[0]*100, probas[1]*100, probas[2]*100
                 
-                # Ajustes por contexto de copa
                 if adjustments:
                     prob_empate += adjustments['draw_boost'] * 100
                     total_prob = prob_local + prob_empate + prob_visita
@@ -558,10 +542,8 @@ if analizar_btn:
                         prob_empate = prob_empate / total_prob * 100
                         prob_visita = prob_visita / total_prob * 100
                 
-                # Usar el motor matemático para generar el resto de métricas (goles, BTTS, etc.)
                 draw_rate = st.session_state.get('draw_rate_auto', 0.25)
                 motor = MotorMatematico(p_copa, draw_rate, liga_id=None)
-                # xG ajustados por contexto (si los hay)
                 xg_l_adj = lgf
                 xg_v_adj = vgf
                 if adjustments:
@@ -578,7 +560,6 @@ if analizar_btn:
             st.warning(f"⚠️ Error usando cerebro: {e}. Usando motor matemático.")
             cerebro = None
 
-    # Si no se usó cerebro, caemos al motor matemático tradicional
     if res is None:
         draw_rate = st.session_state.get('draw_rate_auto', 0.25)
         motor = MotorMatematico(p_copa, draw_rate, liga_id=None)
@@ -587,7 +568,6 @@ if analizar_btn:
         else:
             f_adv_l = st.session_state.get('h_adv_l', 1.1)
             f_adv_v = st.session_state.get('v_adv_v', 0.9)
-        # Fórmula corregida para mayor claridad
         xg_l_final = lgf * f_adv_l
         xg_v_final = vgf * f_adv_v
         if adjustments:
@@ -615,7 +595,6 @@ if analizar_btn:
         st.error("❌ No se pudo generar la predicción. Revisa los datos de entrada.")
         st.stop()
 
-    # Mostrar resultados (igual que antes, sin cambios)
     if adjustments:
         with st.expander("🏆 Análisis de Contexto de Copa", expanded=True):
             col1, col2 = st.columns([1, 2])
