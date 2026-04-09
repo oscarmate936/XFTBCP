@@ -12,8 +12,8 @@ import pytz
 import logging
 
 from math_engine import MotorMatematico
-from api_utils import call_api, get_cup_matches, get_recent_form, get_team_cup_stats
-from data_processing import calc_decay, calc_elo, calc_fuerza_pitagorica, calc_h2h_factor, get_rest_days
+from api_utils import call_api, get_cup_matches, get_recent_form, get_team_cup_stats, get_team_last_matches, get_home_away_ratio
+from data_processing import calc_decay, calc_elo, calc_fuerza_pitagorica, calc_h2h_factor, get_rest_days, weighted_goals, streaks_and_form
 from visual_components import render_dual_bar, render_outcome_card, apply_custom_css
 from cup_context_analyzer import CupContextAnalyzer
 
@@ -71,6 +71,14 @@ if 'h2h_factor' not in st.session_state:
     st.session_state['h2h_factor'] = 1.0
 if 'factor_rest' not in st.session_state:
     st.session_state['factor_rest'] = 1.0
+
+# Nuevas variables de estado para mejoras
+if 'rest_days_local' not in st.session_state:
+    st.session_state['rest_days_local'] = 7
+if 'rest_days_visitor' not in st.session_state:
+    st.session_state['rest_days_visitor'] = 7
+if 'home_advantage_factor' not in st.session_state:
+    st.session_state['home_advantage_factor'] = 1.1
 
 for key, default in [
     ('gd_h_3', 0), ('gd_a_3', 0), ('gd_h_5', 0), ('gd_a_5', 0), ('gd_h_10', 0), ('gd_a_10', 0),
@@ -409,6 +417,16 @@ with st.sidebar:
                     st.session_state['volatilidad_visita'] = vol_a
                     st.session_state['momentum_local'] = mom_h
                     st.session_state['momentum_visita'] = mom_a
+
+                    # ========== MEJORA: días de descanso ==========
+                    fecha_partido = datetime.strptime(m['dateEvent'], '%Y-%m-%d').date()
+                    all_events_local = get_team_last_matches(m['idHomeTeam'], limit=10)
+                    all_events_visitor = get_team_last_matches(m['idAwayTeam'], limit=10)
+                    rest_local = get_rest_days(m['idHomeTeam'], all_events_local, fecha_partido)
+                    rest_visitor = get_rest_days(m['idAwayTeam'], all_events_visitor, fecha_partido)
+                    st.session_state['rest_days_local'] = rest_local
+                    st.session_state['rest_days_visitor'] = rest_visitor
+
                     st.rerun()
             else:
                 st.info("No hay partidos programados en los próximos 2 días para esta competición.")
@@ -441,6 +459,11 @@ with st.container():
     col1, col2 = st.columns([1, 1])
     with col1:
         p_copa = st.number_input("Goles Prom. Copa", 0.5, 5.0, float(st.session_state.get('p_copa_auto', 2.5)), 0.01)
+        # Sliders para ventaja local/visitante (mejora)
+        home_adv_slider = st.slider("Ventaja local (factor)", 0.8, 1.3, st.session_state.get('h_adv_l', 1.1), 0.01)
+        st.session_state['h_adv_l'] = home_adv_slider
+        away_adv_slider = st.slider("Ventaja visitante (factor)", 0.7, 1.2, st.session_state.get('v_adv_v', 0.9), 0.01)
+        st.session_state['v_adv_v'] = away_adv_slider
         modo_neutral = st.toggle("🏟️ Sede Neutral", value=False)
         is_second_leg = st.checkbox("¿Partido de vuelta?")
         if is_second_leg:
@@ -561,13 +584,22 @@ if analizar_btn:
             prob_local, prob_empate, prob_visita = probas[0]*100, probas[1]*100, probas[2]*100
 
             draw_rate = st.session_state.get('draw_rate_auto', 0.25)
-            motor = MotorMatematico(p_copa, draw_rate, liga_id=None)
+            # Pasar la ronda al motor para ajuste dinámico del promedio
+            motor = MotorMatematico(p_copa, draw_rate, liga_id=None, round_name=ronda)
             xg_l_adj = lgf
             xg_v_adj = vgf
+
+            # Factor de descanso (mejora)
+            rest_local = st.session_state.get('rest_days_local', 7)
+            rest_visitor = st.session_state.get('rest_days_visitor', 7)
+            rest_factor = min(1.2, max(0.8, rest_local / max(1, rest_visitor)))
+            xg_l_adj *= rest_factor
+            xg_v_adj /= rest_factor
+
             if adjustments:
                 xg_l_adj *= adjustments['xg_factor']
                 xg_v_adj *= adjustments['xg_factor']
-            res = motor.procesar(xg_l_adj, xg_v_adj, cuotas=(o1, ox, o2))
+            res = motor.procesar(xg_l_adj, xg_v_adj, cuotas=(o1, ox, o2), round_name=ronda)
             res['1X2'] = (prob_local, prob_empate, prob_visita)
             prob_reales = motor.desvig_odds((o1, ox, o2))
             if adjustments:
@@ -588,7 +620,7 @@ if analizar_btn:
 
     if res is None:
         draw_rate = st.session_state.get('draw_rate_auto', 0.25)
-        motor = MotorMatematico(p_copa, draw_rate, liga_id=None)
+        motor = MotorMatematico(p_copa, draw_rate, liga_id=None, round_name=ronda)
         if modo_neutral:
             f_adv_l, f_adv_v = 1.0, 1.0
         else:
@@ -596,12 +628,20 @@ if analizar_btn:
             f_adv_v = st.session_state.get('v_adv_v', 0.9)
         xg_l_final = (lgf/p_copa)*(vgc/p_copa)*p_copa * f_adv_l
         xg_v_final = (vgf/p_copa)*(lgc/p_copa)*p_copa * f_adv_v
+
+        # Factor de descanso
+        rest_local = st.session_state.get('rest_days_local', 7)
+        rest_visitor = st.session_state.get('rest_days_visitor', 7)
+        rest_factor = min(1.2, max(0.8, rest_local / max(1, rest_visitor)))
+        xg_l_final *= rest_factor
+        xg_v_final /= rest_factor
+
         if adjustments:
             xg_l_final *= adjustments['xg_factor']
             xg_v_final *= adjustments['xg_factor']
         xg_l_final = max(0.3, min(4.5, xg_l_final))
         xg_v_final = max(0.3, min(4.5, xg_v_final))
-        res = motor.procesar(xg_l_final, xg_v_final, cuotas=(o1, ox, o2))
+        res = motor.procesar(xg_l_final, xg_v_final, cuotas=(o1, ox, o2), round_name=ronda)
         if adjustments:
             prob_local, prob_empate, prob_visita = res['1X2']
             prob_empate += adjustments['draw_boost'] * 100
