@@ -13,7 +13,7 @@ def calc_elo(pts, max_pts, min_pts):
         return 1.0
     return 0.85 + 0.30 * ((pts - min_pts) / (max_pts - min_pts))
 
-# ---------- Nuevas funciones para extraer features compatibles con el cerebro de copas ----------
+# ---------- Funciones para el cerebro de copas (nuevas) ----------
 def calcular_stats_avanzadas_copa(goles, fechas, prom_liga_media=1.25, C=10.0, hl=30):
     """
     Calcula xG ponderado, volatilidad y momentum.
