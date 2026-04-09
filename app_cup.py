@@ -21,6 +21,52 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ============================================================
+# FUNCIÓN PARA CÁLCULO AUTOMÁTICO DE VENTAJA LOCAL/VISITANTE
+# ============================================================
+def get_auto_home_away_adv(cup_matches, modo_neutral):
+    """Calcula factores de ventaja local y visitante basados en datos de la copa.
+    Retorna (home_adv, away_adv). Si modo_neutral es True, ambos = 1.0."""
+    if modo_neutral:
+        return 1.0, 1.0
+    
+    # Valores por defecto si no hay datos suficientes
+    default_home = 1.1
+    default_away = 0.9
+    
+    if not cup_matches or len(cup_matches) < 5:
+        return default_home, default_away
+    
+    total_home_goles = 0
+    total_away_goles = 0
+    partidos = 0
+    for m in cup_matches:
+        try:
+            home = int(m.get('intHomeScore', 0))
+            away = int(m.get('intAwayScore', 0))
+            total_home_goles += home
+            total_away_goles += away
+            partidos += 1
+        except:
+            continue
+    
+    if partidos == 0:
+        return default_home, default_away
+    
+    avg_home = total_home_goles / partidos
+    avg_away = total_away_goles / partidos
+    
+    if avg_away == 0:
+        avg_away = 0.001
+    
+    # Factor crudo: cuánto más anota el local respecto al visitante
+    raw_factor = avg_home / avg_away
+    # Acotar entre 0.8 y 1.3 para evitar extremos
+    home_adv = max(0.8, min(1.3, raw_factor))
+    # El visitante es inversamente proporcional, pero sin exceder 1.0
+    away_adv = max(0.7, min(1.0, 1.0 / home_adv))
+    return home_adv, away_adv
+
+# ============================================================
 # INICIALIZACIÓN DEL ESTADO DE SESIÓN
 # ============================================================
 if 'p_copa_auto' not in st.session_state:
@@ -96,7 +142,6 @@ for key, default in [
 # CARGA DEL CEREBRO (ENSEMBLE) - PRIORIDAD PARA COPAS
 # ============================================================
 cerebro_path = None
-# Buscar primero el cerebro específico para copas
 for path in ['quantum_cerebro_cup_final.pkl', 'quantum_cerebro_final.pkl', 'quantum_cerebro_ensemble_light.pkl']:
     if os.path.exists(path):
         cerebro_path = path
@@ -418,7 +463,7 @@ with st.sidebar:
                     st.session_state['momentum_local'] = mom_h
                     st.session_state['momentum_visita'] = mom_a
 
-                    # ========== MEJORA: días de descanso ==========
+                    # Días de descanso
                     fecha_partido = datetime.strptime(m['dateEvent'], '%Y-%m-%d').date()
                     all_events_local = get_team_last_matches(m['idHomeTeam'], limit=10)
                     all_events_visitor = get_team_last_matches(m['idAwayTeam'], limit=10)
@@ -459,11 +504,7 @@ with st.container():
     col1, col2 = st.columns([1, 1])
     with col1:
         p_copa = st.number_input("Goles Prom. Copa", 0.5, 5.0, float(st.session_state.get('p_copa_auto', 2.5)), 0.01)
-        # Sliders para ventaja local/visitante (mejora)
-        home_adv_slider = st.slider("Ventaja local (factor)", 0.8, 1.3, st.session_state.get('h_adv_l', 1.1), 0.01)
-        st.session_state['h_adv_l'] = home_adv_slider
-        away_adv_slider = st.slider("Ventaja visitante (factor)", 0.7, 1.2, st.session_state.get('v_adv_v', 0.9), 0.01)
-        st.session_state['v_adv_v'] = away_adv_slider
+        # El factor de ventaja local y visitante se calcula automáticamente (no hay sliders)
         modo_neutral = st.toggle("🏟️ Sede Neutral", value=False)
         is_second_leg = st.checkbox("¿Partido de vuelta?")
         if is_second_leg:
@@ -509,6 +550,7 @@ if analizar_btn:
     res = None
     adjustments = None
 
+    # Análisis de contexto de copa
     if st.session_state.get('cup_matches_cached') and st.session_state.get('tl_stats') is not None:
         try:
             analyzer = CupContextAnalyzer(
@@ -524,12 +566,18 @@ if analizar_btn:
             logger.error(f"Error en análisis de contexto de copa: {e}")
             adjustments = None
 
+    # Calcular factores de ventaja local/visitante automáticamente
+    home_adv_used, away_adv_used = get_auto_home_away_adv(
+        st.session_state.get('cup_matches_cached', []),
+        modo_neutral
+    )
+    # Actualizar las variables de sesión por si se usan después
+    st.session_state['h_adv_l'] = home_adv_used
+    st.session_state['v_adv_v'] = away_adv_used
+
     cerebro = st.session_state.get('cerebro_ensemble')
     if cerebro is not None and st.session_state.get('tl_stats') is not None:
         try:
-            home_adv_used = 1.0 if modo_neutral else st.session_state.get('h_adv_l', 1.1)
-            away_adv_used = 1.0 if modo_neutral else st.session_state.get('v_adv_v', 0.9)
-
             tl = st.session_state['tl_stats']
             tv = st.session_state['tv_stats']
             tl['intPoints'] = 0
@@ -584,12 +632,11 @@ if analizar_btn:
             prob_local, prob_empate, prob_visita = probas[0]*100, probas[1]*100, probas[2]*100
 
             draw_rate = st.session_state.get('draw_rate_auto', 0.25)
-            # Pasar la ronda al motor para ajuste dinámico del promedio
             motor = MotorMatematico(p_copa, draw_rate, liga_id=None, round_name=ronda)
             xg_l_adj = lgf
             xg_v_adj = vgf
 
-            # Factor de descanso (mejora)
+            # Factor de descanso
             rest_local = st.session_state.get('rest_days_local', 7)
             rest_visitor = st.session_state.get('rest_days_visitor', 7)
             rest_factor = min(1.2, max(0.8, rest_local / max(1, rest_visitor)))
@@ -624,8 +671,8 @@ if analizar_btn:
         if modo_neutral:
             f_adv_l, f_adv_v = 1.0, 1.0
         else:
-            f_adv_l = st.session_state.get('h_adv_l', 1.1)
-            f_adv_v = st.session_state.get('v_adv_v', 0.9)
+            f_adv_l = home_adv_used
+            f_adv_v = away_adv_used
         xg_l_final = (lgf/p_copa)*(vgc/p_copa)*p_copa * f_adv_l
         xg_v_final = (vgf/p_copa)*(lgc/p_copa)*p_copa * f_adv_v
 
