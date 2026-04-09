@@ -6,16 +6,38 @@ from scipy.optimize import minimize
 from collections import Counter
 
 class MotorMatematico:
-    def __init__(self, league_avg=2.5, draw_rate_real=0.25, liga_id=None):
+    def __init__(self, league_avg=2.5, draw_rate_real=0.25, liga_id=None, round_name=None):
         self.liga_id = liga_id
+        # ========== MEJORA: promedio de goles por ronda ==========
+        self.round_avg = self.get_round_avg(round_name, league_avg)
         if liga_id and f'rho_{liga_id}' in st.session_state:
             self.rho = st.session_state[f'rho_{liga_id}']
         else:
-            self.rho = self.optimizar_rho(draw_rate_real, league_avg)
+            self.rho = self.optimizar_rho(draw_rate_real, self.round_avg)
             if liga_id:
                 st.session_state[f'rho_{liga_id}'] = self.rho
         self.pi_l = 0.06
         self.pi_v = 0.09
+
+    # ========== MEJORA: promedio según ronda ==========
+    def get_round_avg(self, round_name, default_avg):
+        if not round_name:
+            return default_avg
+        round_avg_map = {
+            'Grupos': 2.8,
+            'Octavos': 2.5,
+            'Cuartos': 2.3,
+            'Semifinal': 2.1,
+            'Final': 1.9,
+            'Primera ronda': 2.6,
+            'Segunda ronda': 2.6,
+            'Tercera ronda': 2.5
+        }
+        # Buscar coincidencia parcial
+        for key, avg in round_avg_map.items():
+            if key.lower() in round_name.lower():
+                return avg
+        return default_avg
 
     def optimizar_rho(self, empates_reales_pct, prom_liga):
         l_prom = max(0.1, prom_liga / 2)
@@ -43,6 +65,7 @@ class MotorMatematico:
         zip_v[0] += self.pi_v
         matriz = np.outer(zip_l, zip_v)
         tau = self.rho
+        # ========== MEJORA: ajuste de tau según contexto (se puede setear desde fuera) ==========
         if l1 > 0 and l2 > 0:
             matriz[0,0] *= max(0, 1 - l1 * l2 * tau)
             if size > 1:
@@ -86,7 +109,7 @@ class MotorMatematico:
             base_sims = np.random.poisson(xg, sims)
         return np.where(ceros_estructurales, 0, base_sims)
 
-    def procesar(self, xg_l, xg_v, cuotas=(1.0, 1.0, 1.0)):
+    def procesar(self, xg_l, xg_v, cuotas=(1.0, 1.0, 1.0), round_name=None):
         size = 12
         matriz = self.bivariate_poisson(xg_l, xg_v, size)
         p1 = np.sum(np.tril(matriz, -1))
