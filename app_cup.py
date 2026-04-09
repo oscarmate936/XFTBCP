@@ -223,10 +223,13 @@ def obtener_estadisticas_avanzadas(team_id, events, max_partidos=10):
     
     for ev in events[:max_partidos]:
         try:
-            if ev.get('intHomeScore') is None:
+            # CORRECCIÓN: manejar valores None
+            s_h = ev.get('intHomeScore')
+            s_a = ev.get('intAwayScore')
+            if s_h is None or s_a is None:
                 continue
-            s_h = int(ev['intHomeScore'])
-            s_a = int(ev['intAwayScore'])
+            s_h = int(s_h)
+            s_a = int(s_a)
             if str(ev.get('idHomeTeam')) == str(team_id):
                 gf_list.append(s_h)
                 gc_list.append(s_a)
@@ -279,14 +282,9 @@ def obtener_estadisticas_avanzadas(team_id, events, max_partidos=10):
 # BACKTEST FUNCTION
 # ============================================================
 def run_backtest(matches, prom_goles_total, draw_rate_total, cerebro=None):
-    """
-    Ejecuta backtest sobre partidos pasados (sin usar información futura).
-    Retorna dict con métricas.
-    """
     if len(matches) < 10:
         return None
     
-    # Ordenar por fecha
     matches_sorted = sorted([m for m in matches if m.get('dateEvent')], key=lambda x: x['dateEvent'])
     
     correct_1x2 = 0
@@ -294,65 +292,52 @@ def run_backtest(matches, prom_goles_total, draw_rate_total, cerebro=None):
     correct_btts = 0
     total = 0
     
-    # Para evitar look-ahead, vamos iterando y usando solo partidos anteriores
     for i, match in enumerate(matches_sorted):
-        if i < 5:  # necesitamos al menos 5 partidos previos para estadísticas
+        if i < 5:
             continue
-        
-        # Fecha del partido
         try:
             match_date = datetime.strptime(match['dateEvent'], '%Y-%m-%d').date()
         except:
             continue
         
-        # Partidos anteriores (solo hasta esta fecha)
         past_matches = matches_sorted[:i]
-        
-        # Estadísticas acumuladas de los equipos hasta antes de este partido
         team_home = match['idHomeTeam']
         team_away = match['idAwayTeam']
         
-        # Calcular stats solo con partidos anteriores
-        gf_l = sum(int(ev['intHomeScore']) for ev in past_matches if ev['idHomeTeam'] == team_home)
-        gf_l += sum(int(ev['intAwayScore']) for ev in past_matches if ev['idAwayTeam'] == team_home)
-        gc_l = sum(int(ev['intAwayScore']) for ev in past_matches if ev['idHomeTeam'] == team_home)
-        gc_l += sum(int(ev['intHomeScore']) for ev in past_matches if ev['idAwayTeam'] == team_home)
+        gf_l = sum(int(ev['intHomeScore']) for ev in past_matches if ev['idHomeTeam'] == team_home and ev['intHomeScore'] is not None)
+        gf_l += sum(int(ev['intAwayScore']) for ev in past_matches if ev['idAwayTeam'] == team_home and ev['intAwayScore'] is not None)
+        gc_l = sum(int(ev['intAwayScore']) for ev in past_matches if ev['idHomeTeam'] == team_home and ev['intAwayScore'] is not None)
+        gc_l += sum(int(ev['intHomeScore']) for ev in past_matches if ev['idAwayTeam'] == team_home and ev['intHomeScore'] is not None)
         pj_l = len([ev for ev in past_matches if ev['idHomeTeam'] == team_home or ev['idAwayTeam'] == team_home])
         
-        gf_v = sum(int(ev['intHomeScore']) for ev in past_matches if ev['idHomeTeam'] == team_away)
-        gf_v += sum(int(ev['intAwayScore']) for ev in past_matches if ev['idAwayTeam'] == team_away)
-        gc_v = sum(int(ev['intAwayScore']) for ev in past_matches if ev['idHomeTeam'] == team_away)
-        gc_v += sum(int(ev['intHomeScore']) for ev in past_matches if ev['idAwayTeam'] == team_away)
+        gf_v = sum(int(ev['intHomeScore']) for ev in past_matches if ev['idHomeTeam'] == team_away and ev['intHomeScore'] is not None)
+        gf_v += sum(int(ev['intAwayScore']) for ev in past_matches if ev['idAwayTeam'] == team_away and ev['intAwayScore'] is not None)
+        gc_v = sum(int(ev['intAwayScore']) for ev in past_matches if ev['idHomeTeam'] == team_away and ev['intAwayScore'] is not None)
+        gc_v += sum(int(ev['intHomeScore']) for ev in past_matches if ev['idAwayTeam'] == team_away and ev['intHomeScore'] is not None)
         pj_v = len([ev for ev in past_matches if ev['idHomeTeam'] == team_away or ev['idAwayTeam'] == team_away])
         
         if pj_l < 3 or pj_v < 3:
             continue
         
-        # xG esperados
         prom_media = prom_goles_total / 2
         xg_l = (gf_l / max(pj_l,1)) 
         xg_v = (gf_v / max(pj_v,1))
         
-        # Usar motor matemático
         motor = MotorMatematico(prom_goles_total, draw_rate_total, round_name="Backtest")
         res = motor.procesar(xg_l, xg_v)
         
-        # Resultado real
         gh = int(match['intHomeScore'])
         ga = int(match['intAwayScore'])
         real = 0 if gh > ga else (1 if gh == ga else 2)
         pred = np.argmax(res['1X2'])
-        
         if pred == real:
             correct_1x2 += 1
         
-        # Over 2.5
         total_goles = gh + ga
         pred_over = res['GOLES'][2.5][0] > 50
         if (total_goles > 2.5) == pred_over:
             correct_over25 += 1
         
-        # BTTS
         btts_real = (gh > 0 and ga > 0)
         pred_btts = res['BTTS'][0] > 50
         if btts_real == pred_btts:
@@ -406,8 +391,11 @@ with st.sidebar:
             total_partidos = 0
             for m in matches:
                 try:
-                    total_goles += int(m['intHomeScore']) + int(m['intAwayScore'])
-                    total_partidos += 1
+                    gh = m.get('intHomeScore')
+                    ga = m.get('intAwayScore')
+                    if gh is not None and ga is not None:
+                        total_goles += int(gh) + int(ga)
+                        total_partidos += 1
                 except:
                     continue
             prom_goles = total_goles / max(1, total_partidos)
@@ -516,13 +504,16 @@ with st.sidebar:
                     st.session_state['momentum_visita'] = mom_a
 
                     # Días de descanso
-                    fecha_partido = datetime.strptime(m['dateEvent'], '%Y-%m-%d').date()
-                    all_events_local = get_team_last_matches(m['idHomeTeam'], limit=10)
-                    all_events_visitor = get_team_last_matches(m['idAwayTeam'], limit=10)
-                    rest_local = get_rest_days(m['idHomeTeam'], all_events_local, fecha_partido)
-                    rest_visitor = get_rest_days(m['idAwayTeam'], all_events_visitor, fecha_partido)
-                    st.session_state['rest_days_local'] = rest_local
-                    st.session_state['rest_days_visitor'] = rest_visitor
+                    try:
+                        fecha_partido = datetime.strptime(m['dateEvent'], '%Y-%m-%d').date()
+                        all_events_local = get_team_last_matches(m['idHomeTeam'], limit=10)
+                        all_events_visitor = get_team_last_matches(m['idAwayTeam'], limit=10)
+                        rest_local = get_rest_days(m['idHomeTeam'], all_events_local, fecha_partido)
+                        rest_visitor = get_rest_days(m['idAwayTeam'], all_events_visitor, fecha_partido)
+                        st.session_state['rest_days_local'] = rest_local
+                        st.session_state['rest_days_visitor'] = rest_visitor
+                    except:
+                        pass
 
                     st.rerun()
             else:
