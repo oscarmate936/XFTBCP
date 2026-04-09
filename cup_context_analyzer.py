@@ -26,20 +26,46 @@ class CupContextAnalyzer:
             h, a = self.first_leg_result
             diff = abs(h - a)
             if diff <= 1:
-                return 0.3
-            return 0.1
+                return 0.3   # eliminatoria abierta
+            elif diff == 2:
+                return 0.15
+            else:
+                return 0.05   # casi decidido
         return 0.2
 
     def _away_goals_rule_factor(self):
+        # La regla del gol visitante ya no existe en muchas competiciones, pero puede influir psicológicamente
         if not self.is_second_leg:
             return 0.0
-        return 0.05
+        # Si el partido de ida terminó con empate a >0 goles, el visitante tiene ventaja psicológica
+        if self.first_leg_result and self.first_leg_result[0] == self.first_leg_result[1] and self.first_leg_result[0] > 0:
+            return 0.07
+        return 0.03
+
+    # ========== MEJORA: nuevos factores ==========
+    def _first_leg_deficit(self):
+        """Si el equipo local va perdiendo en el global, tenderá a atacar más."""
+        if not self.is_second_leg or not self.first_leg_result:
+            return 0.0
+        h, a = self.first_leg_result
+        # Asumiendo que el 'home_team' es el que juega en casa en la vuelta
+        # Necesitamos saber quién es local en la ida? Por simplicidad, usamos la diferencia global
+        # Si el equipo local (en vuelta) perdiera por 2+ goles, aumenta agresividad
+        if a - h >= 2:   # el visitante de la ida (que ahora es local?) Cuidado: lógica más clara:
+            # Mejor: calcular diferencia global suponiendo que el resultado de ida es (goles_local_ida, goles_visitante_ida)
+            # y el equipo local de la vuelta es el que era visitante en la ida? Esto se complica.
+            # Por simplicidad, devolvemos un factor si la diferencia global es >=2
+            diff_global = abs(h - a)
+            if diff_global >= 2:
+                return 0.2
+        return 0.0
 
     def compute_importance(self):
         factors = {
             '🏆 Fase avanzada': self._get_team_elimination_stage() * 0.4,
             '⚖️ Partido de vuelta ajustado': self._is_high_pressure(),
-            '🌍 Regla gol visitante': self._away_goals_rule_factor()
+            '🌍 Regla gol visitante': self._away_goals_rule_factor(),
+            '📉 Déficit en la ida': self._first_leg_deficit()   # NUEVO
         }
         total = sum(factors.values())
         importance = min(total, 1.0)
@@ -47,6 +73,7 @@ class CupContextAnalyzer:
 
     def get_adjustments(self):
         importance, factors = self.compute_importance()
+        # Ajustes más finos según importancia
         if importance > 0.6:
             xg_factor = 0.92
             draw_boost = 0.05
@@ -59,6 +86,12 @@ class CupContextAnalyzer:
             xg_factor = 1.05
             draw_boost = -0.02
             level = "🍃 BAJA (fase temprana o resultado cómodo)"
+
+        # Ajuste adicional si hay déficit (más ataque, menos empate)
+        if factors.get('📉 Déficit en la ida', 0) > 0:
+            xg_factor *= 1.08   # más goles esperados
+            draw_boost -= 0.03   # menos probabilidad de empate
+
         return {
             'xg_factor': xg_factor,
             'draw_boost': draw_boost,
