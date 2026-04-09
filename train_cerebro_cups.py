@@ -329,4 +329,4 @@ filename = 'quantum_cerebro_cup_final.pkl'
 joblib.dump(cerebro_cup, filename, compress=3)
 size = os.path.getsize(filename) / 1e6
 print(f"\n✅ CEREBRO PARA COPAS GUARDADO en '{filename}'. Tamaño: {size:.2f} MB")
-print("🎉 Puedes usar este cerebro en app_cup.py colocándolo en la raíz del proyecto.")
+print("🎉 Puedes usar este cerebro en app_cup.py colocándolo en la raíz del proyecto.") 
