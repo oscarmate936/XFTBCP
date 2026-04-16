@@ -1,5 +1,5 @@
 # app_cup.py
-# DeepXG Cup Predictor - Versión final mejorada
+# DeepXG Cup Predictor - Versión final corregida
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,6 +11,7 @@ import os
 from datetime import datetime
 import pytz
 import logging
+import html
 
 from math_engine import MotorMatematico
 from api_utils import (
@@ -376,6 +377,8 @@ def mostrar_panel_sugerencias(sugerencias):
     """Renderiza un panel atractivo con las sugerencias destacadas."""
     if not sugerencias:
         return
+
+    # CSS como string separado para evitar conflictos con f-string
     st.markdown("""
     <style>
     .suggestions-panel {
@@ -456,26 +459,40 @@ def mostrar_panel_sugerencias(sugerencias):
     </style>
     """, unsafe_allow_html=True)
 
-    html = '<div class="suggestions-panel">'
-    html += '<div class="suggestions-title">🎯 Sugerencias Destacadas <span class="suggestion-badge">ALTA CONFIANZA</span></div>'
-    html += '<div class="suggestion-grid">'
+    # Construir el HTML con cuidado, escapando valores dinámicos
+    html_parts = []
+    html_parts.append('<div class="suggestions-panel">')
+    html_parts.append('<div class="suggestions-title">🎯 Sugerencias Destacadas <span class="suggestion-badge">ALTA CONFIANZA</span></div>')
+    html_parts.append('<div class="suggestion-grid">')
+
     for sug in sugerencias:
-        ev_str = f' · EV {sug["ev"]:+.2f}' if sug.get('ev') is not None else ''
-        kelly_str = f' · K {sug["kelly"]:.1f}%' if sug.get('kelly') is not None and sug["kelly"] > 0 else ''
-        cuota_str = f' · Cuota {sug["cuota"]:.2f}' if sug.get('cuota') is not None else ''
-        html += f'''
+        mercado = html.escape(sug['mercado'])
+        seleccion = html.escape(sug['seleccion'])
+        razon = html.escape(sug['razon'])
+        prob = f"{sug['prob']:.1f}"
+        ev_str = f" · EV {sug['ev']:+.2f}" if sug.get('ev') is not None else ''
+        kelly_str = f" · K {sug['kelly']:.1f}%" if sug.get('kelly') is not None and sug['kelly'] > 0 else ''
+        cuota_str = f" · Cuota {sug['cuota']:.2f}" if sug.get('cuota') is not None else ''
+        metricas = f"{ev_str}{kelly_str}{cuota_str}"
+
+        card = f'''
         <div class="suggestion-card">
-            <div class="suggestion-mercado">{sug['mercado']}</div>
-            <div class="suggestion-seleccion">{sug['seleccion']}</div>
+            <div class="suggestion-mercado">{mercado}</div>
+            <div class="suggestion-seleccion">{seleccion}</div>
             <div style="display: flex; align-items: baseline; gap: 8px;">
-                <span class="suggestion-prob">{sug['prob']:.1f}%</span>
-                <span class="suggestion-ev">{ev_str}{kelly_str}{cuota_str}</span>
+                <span class="suggestion-prob">{prob}%</span>
+                <span class="suggestion-ev">{metricas}</span>
             </div>
-            <div class="suggestion-razon">{sug['razon']}</div>
+            <div class="suggestion-razon">{razon}</div>
         </div>
         '''
-    html += '</div></div>'
-    st.markdown(html, unsafe_allow_html=True)
+        html_parts.append(card)
+
+    html_parts.append('</div>')
+    html_parts.append('</div>')
+
+    full_html = ''.join(html_parts)
+    st.markdown(full_html, unsafe_allow_html=True)
 
 # ============================================================
 # INICIALIZACIÓN DEL ESTADO DE SESIÓN
