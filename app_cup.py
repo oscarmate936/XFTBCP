@@ -1,9 +1,10 @@
+# app.py
+# DeepXG Cup Predictor - Versión Mejorada
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from fuzzywuzzy import process
 from collections import Counter
 import joblib
 import os
@@ -12,8 +13,14 @@ import pytz
 import logging
 
 from math_engine import MotorMatematico
-from api_utils import call_api, get_cup_matches, get_recent_form, get_team_cup_stats, get_team_last_matches, get_home_away_ratio
-from data_processing import calc_decay, calc_elo, calc_fuerza_pitagorica, calc_h2h_factor, get_rest_days, weighted_goals, streaks_and_form
+from api_utils import (
+    call_api, get_cup_matches, get_recent_form, get_team_cup_stats,
+    get_team_last_matches, get_home_away_ratio
+)
+from data_processing import (
+    calc_decay, calc_elo, calc_fuerza_pitagorica, calc_h2h_factor,
+    get_rest_days, weighted_goals, streaks_and_form
+)
 from visual_components import render_dual_bar, render_outcome_card, apply_custom_css
 from cup_context_analyzer import CupContextAnalyzer
 
@@ -21,21 +28,16 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# FUNCIÓN PARA CÁLCULO AUTOMÁTICO DE VENTAJA LOCAL/VISITANTE
+# FUNCIONES AUXILIARES DE CÁLCULO
 # ============================================================
 def get_auto_home_away_adv(cup_matches, modo_neutral):
-    """Calcula factores de ventaja local y visitante basados en datos de la copa.
-    Retorna (home_adv, away_adv). Si modo_neutral es True, ambos = 1.0."""
+    """Calcula factores de ventaja local y visitante basados en datos de la copa."""
     if modo_neutral:
         return 1.0, 1.0
-    
-    # Valores por defecto si no hay datos suficientes
-    default_home = 1.1
-    default_away = 0.9
-    
+    default_home = 1.08
+    default_away = 0.92
     if not cup_matches or len(cup_matches) < 5:
         return default_home, default_away
-    
     total_home_goles = 0
     total_away_goles = 0
     partidos = 0
@@ -48,128 +50,17 @@ def get_auto_home_away_adv(cup_matches, modo_neutral):
             partidos += 1
         except:
             continue
-    
     if partidos == 0:
         return default_home, default_away
-    
     avg_home = total_home_goles / partidos
     avg_away = total_away_goles / partidos
-    
     if avg_away == 0:
         avg_away = 0.001
-    
-    # Factor crudo: cuánto más anota el local respecto al visitante
     raw_factor = avg_home / avg_away
-    # Acotar entre 0.8 y 1.3 para evitar extremos
-    home_adv = max(0.8, min(1.3, raw_factor))
-    # El visitante es inversamente proporcional, pero sin exceder 1.0
-    away_adv = max(0.7, min(1.0, 1.0 / home_adv))
+    home_adv = max(0.85, min(1.25, raw_factor))
+    away_adv = max(0.75, min(1.0, 1.0 / home_adv))
     return home_adv, away_adv
 
-# ============================================================
-# INICIALIZACIÓN DEL ESTADO DE SESIÓN
-# ============================================================
-if 'p_copa_auto' not in st.session_state:
-    st.session_state['p_copa_auto'] = 2.5
-if 'nl_auto' not in st.session_state:
-    st.session_state['nl_auto'] = "Equipo Local"
-if 'nv_auto' not in st.session_state:
-    st.session_state['nv_auto'] = "Equipo Visitante"
-if 'h_adv_l' not in st.session_state:
-    st.session_state['h_adv_l'] = 1.10
-if 'v_adv_v' not in st.session_state:
-    st.session_state['v_adv_v'] = 0.90
-if 'cup_matches_cached' not in st.session_state:
-    st.session_state['cup_matches_cached'] = []
-if 'draw_rate_auto' not in st.session_state:
-    st.session_state['draw_rate_auto'] = 0.25
-if 'tl_stats' not in st.session_state:
-    st.session_state['tl_stats'] = None
-if 'tv_stats' not in st.session_state:
-    st.session_state['tv_stats'] = None
-if 'lgf_auto' not in st.session_state:
-    st.session_state['lgf_auto'] = 1.2
-if 'lgc_auto' not in st.session_state:
-    st.session_state['lgc_auto'] = 1.0
-if 'vgf_auto' not in st.session_state:
-    st.session_state['vgf_auto'] = 1.1
-if 'vgc_auto' not in st.session_state:
-    st.session_state['vgc_auto'] = 1.3
-if 'elo_l' not in st.session_state:
-    st.session_state['elo_l'] = 1.0
-if 'elo_v' not in st.session_state:
-    st.session_state['elo_v'] = 1.0
-if 'pit_l' not in st.session_state:
-    st.session_state['pit_l'] = 0.5
-if 'pit_v' not in st.session_state:
-    st.session_state['pit_v'] = 0.5
-if 'prom_media_copa' not in st.session_state:
-    st.session_state['prom_media_copa'] = 1.25
-if 'gf_rec_l' not in st.session_state:
-    st.session_state['gf_rec_l'] = None
-if 'gc_rec_l' not in st.session_state:
-    st.session_state['gc_rec_l'] = None
-if 'gf_rec_v' not in st.session_state:
-    st.session_state['gf_rec_v'] = None
-if 'gc_rec_v' not in st.session_state:
-    st.session_state['gc_rec_v'] = None
-if 'h2h_factor' not in st.session_state:
-    st.session_state['h2h_factor'] = 1.0
-if 'factor_rest' not in st.session_state:
-    st.session_state['factor_rest'] = 1.0
-
-# Nuevas variables de estado para mejoras
-if 'rest_days_local' not in st.session_state:
-    st.session_state['rest_days_local'] = 7
-if 'rest_days_visitor' not in st.session_state:
-    st.session_state['rest_days_visitor'] = 7
-if 'home_advantage_factor' not in st.session_state:
-    st.session_state['home_advantage_factor'] = 1.1
-
-for key, default in [
-    ('gd_h_3', 0), ('gd_a_3', 0), ('gd_h_5', 0), ('gd_a_5', 0), ('gd_h_10', 0), ('gd_a_10', 0),
-    ('avg_gf_h_3', 0.0), ('avg_gc_h_3', 0.0), ('avg_gf_a_3', 0.0), ('avg_gc_a_3', 0.0),
-    ('btts_h_5', 0.0), ('btts_a_5', 0.0),
-    ('win_streak_h', 0), ('loss_streak_h', 0), ('win_streak_a', 0), ('loss_streak_a', 0),
-    ('racha_esp_local', 0.0), ('racha_esp_visita', 0.0),
-    ('volatilidad_local', 0.0), ('volatilidad_visita', 0.0),
-    ('momentum_local', 0.0), ('momentum_visita', 0.0)
-]:
-    if key not in st.session_state:
-        st.session_state[key] = default
-
-# ============================================================
-# CARGA DEL CEREBRO (ENSEMBLE) - PRIORIDAD PARA COPAS
-# ============================================================
-cerebro_path = None
-for path in ['quantum_cerebro_cup_final.pkl', 'quantum_cerebro_final.pkl', 'quantum_cerebro_ensemble_light.pkl']:
-    if os.path.exists(path):
-        cerebro_path = path
-        break
-
-if cerebro_path:
-    try:
-        cerebro_ensemble = joblib.load(cerebro_path)
-        st.session_state['cerebro_ensemble'] = cerebro_ensemble
-        st.session_state['cerebro_path'] = cerebro_path
-        logger.info(f"Cerebro cargado desde {cerebro_path}")
-        if 'cup' in cerebro_path:
-            st.success("🧠 Usando cerebro especializado en COPAS")
-        else:
-            st.info("🧠 Usando cerebro general (ligas) - puede ser menos preciso en copas")
-    except Exception as e:
-        st.session_state['cerebro_ensemble'] = None
-        st.warning(f"Error cargando cerebro ({cerebro_path}): {e}")
-else:
-    st.session_state['cerebro_ensemble'] = None
-    st.info("ℹ️ No se encontró archivo de cerebro. Se usará el motor matemático.")
-
-apply_custom_css()
-st.set_page_config(page_title="DeepXG Cup Predictor", layout="wide", initial_sidebar_state="expanded")
-
-# ============================================================
-# FUNCIONES AUXILIARES
-# ============================================================
 def convertir_hora_elsalvador(fecha_str, hora_str=None):
     tz_sv = pytz.timezone('America/El_Salvador')
     if not fecha_str:
@@ -201,7 +92,8 @@ def formatear_dia_local(dt):
     if dt is None:
         return "Fecha no disponible"
     dias = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
-    meses = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+    meses = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+             'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
     return f"{dias[dt.weekday()]} {dt.day} de {meses[dt.month-1]}"
 
 def formatear_hora_local(dt):
@@ -262,11 +154,9 @@ def calcular_caracteristicas_ensemble(tl, tv, prom_media_liga, gf_rec_l, gc_rec_
 def obtener_estadisticas_avanzadas(team_id, events, max_partidos=10):
     if not events:
         return (0, 0, 0, 0.0, 0.0, 0.0, 0, 0, 0.0, 0.0, 0.0)
-    
     gf_list = []
     gc_list = []
     pts_list = []
-    
     for ev in events[:max_partidos]:
         try:
             if ev.get('intHomeScore') is None:
@@ -283,10 +173,8 @@ def obtener_estadisticas_avanzadas(team_id, events, max_partidos=10):
                 pts_list.append(3 if s_a > s_h else (1 if s_a == s_h else 0))
         except:
             continue
-    
     if not gf_list:
         return (0, 0, 0, 0.0, 0.0, 0.0, 0, 0, 0.0, 0.0, 0.0)
-    
     n = len(gf_list)
     gd_3 = sum(gf_list[:3]) - sum(gc_list[:3]) if n >= 3 else 0
     gd_5 = sum(gf_list[:5]) - sum(gc_list[:5]) if n >= 5 else 0
@@ -322,6 +210,51 @@ def obtener_estadisticas_avanzadas(team_id, events, max_partidos=10):
             win_streak, loss_streak, racha, vol, mom)
 
 # ============================================================
+# INICIALIZACIÓN DEL ESTADO DE SESIÓN
+# ============================================================
+for key, default in [
+    ('p_copa_auto', 2.5), ('nl_auto', "Equipo Local"), ('nv_auto', "Equipo Visitante"),
+    ('cup_matches_cached', []), ('draw_rate_auto', 0.25), ('tl_stats', None), ('tv_stats', None),
+    ('lgf_auto', 1.2), ('lgc_auto', 1.0), ('vgf_auto', 1.1), ('vgc_auto', 1.3),
+    ('elo_l', 1.0), ('elo_v', 1.0), ('pit_l', 0.5), ('pit_v', 0.5),
+    ('prom_media_copa', 1.25), ('h_adv_l', 1.10), ('v_adv_v', 0.90),
+    ('gd_h_3', 0), ('gd_a_3', 0), ('gd_h_5', 0), ('gd_a_5', 0), ('gd_h_10', 0), ('gd_a_10', 0),
+    ('avg_gf_h_3', 0.0), ('avg_gc_h_3', 0.0), ('avg_gf_a_3', 0.0), ('avg_gc_a_3', 0.0),
+    ('btts_h_5', 0.0), ('btts_a_5', 0.0),
+    ('win_streak_h', 0), ('loss_streak_h', 0), ('win_streak_a', 0), ('loss_streak_a', 0),
+    ('racha_esp_local', 0.0), ('racha_esp_visita', 0.0),
+    ('volatilidad_local', 0.0), ('volatilidad_visita', 0.0),
+    ('momentum_local', 0.0), ('momentum_visita', 0.0),
+    ('rest_days_local', 7), ('rest_days_visitor', 7),
+    ('cerebro_ensemble', None), ('cerebro_path', '')
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+# ============================================================
+# CARGA DEL CEREBRO (ENSEMBLE)
+# ============================================================
+cerebro_path = None
+for path in ['quantum_cerebro_cup_final.pkl', 'quantum_cerebro_final.pkl', 'quantum_cerebro_ensemble_light.pkl']:
+    if os.path.exists(path):
+        cerebro_path = path
+        break
+if cerebro_path:
+    try:
+        cerebro_ensemble = joblib.load(cerebro_path)
+        st.session_state['cerebro_ensemble'] = cerebro_ensemble
+        st.session_state['cerebro_path'] = cerebro_path
+        logger.info(f"Cerebro cargado desde {cerebro_path}")
+    except Exception as e:
+        st.session_state['cerebro_ensemble'] = None
+        st.warning(f"Error cargando cerebro ({cerebro_path}): {e}")
+else:
+    st.session_state['cerebro_ensemble'] = None
+
+apply_custom_css()
+st.set_page_config(page_title="DeepXG Cup Predictor", layout="wide", initial_sidebar_state="expanded")
+
+# ============================================================
 # SIDEBAR (SELECCIÓN DE COPA Y SINCRONIZACIÓN)
 # ============================================================
 with st.sidebar:
@@ -337,7 +270,7 @@ with st.sidebar:
         "🇮🇹 Coppa Italia": {"id": 4485, "season_default": "2025-2026"},
         "🇩🇪 DFB-Pokal": {"id": 4486, "season_default": "2025-2026"},
         "🇫🇷 Coupe de France": {"id": 4487, "season_default": "2025-2026"},
-        "🌍 Mundial de Clubes": {"id": 4488, "season_default": "2025"},
+        "🌍 Mundial de Clubes": {"id": 4488, "season_default": "2026"},
     }
 
     copa_sel = st.selectbox("Elegir Copa", list(copas.keys()))
@@ -421,8 +354,7 @@ with st.sidebar:
                     elo_v = calc_elo(gf_v - gc_v, max_pts, 0)
                     pit_l = calc_fuerza_pitagorica(gf_l, gc_l)
                     pit_v = calc_fuerza_pitagorica(gf_v, gc_v)
-                    home_adv = 1.1
-                    away_adv = 0.9
+                    home_adv, away_adv = get_auto_home_away_adv(st.session_state['cup_matches_cached'], False)
                     xg_l_base = (gf_l / max(pj_l,1)) * elo_l * pit_l
                     xg_v_base = (gf_v / max(pj_v,1)) * elo_v * pit_v
                     st.session_state['lgf_auto'] = xg_l_base * home_adv
@@ -434,8 +366,8 @@ with st.sidebar:
                     st.session_state['pit_l'] = pit_l
                     st.session_state['pit_v'] = pit_v
                     st.session_state['prom_media_copa'] = prom_media
-                    recent_l = get_recent_form(m['idHomeTeam'])
-                    recent_v = get_recent_form(m['idAwayTeam'])
+                    recent_l = get_team_last_matches(m['idHomeTeam'], limit=10)
+                    recent_v = get_team_last_matches(m['idAwayTeam'], limit=10)
                     (gd_h_3, gd_h_5, gd_h_10, avg_gf_h_3, avg_gc_h_3, btts_h_5,
                      win_streak_h, loss_streak_h, racha_h, vol_h, mom_h) = obtener_estadisticas_avanzadas(m['idHomeTeam'], recent_l)
                     (gd_a_3, gd_a_5, gd_a_10, avg_gf_a_3, avg_gc_a_3, btts_a_5,
@@ -462,8 +394,6 @@ with st.sidebar:
                     st.session_state['volatilidad_visita'] = vol_a
                     st.session_state['momentum_local'] = mom_h
                     st.session_state['momentum_visita'] = mom_a
-
-                    # Días de descanso
                     fecha_partido = datetime.strptime(m['dateEvent'], '%Y-%m-%d').date()
                     all_events_local = get_team_last_matches(m['idHomeTeam'], limit=10)
                     all_events_visitor = get_team_last_matches(m['idAwayTeam'], limit=10)
@@ -471,23 +401,9 @@ with st.sidebar:
                     rest_visitor = get_rest_days(m['idAwayTeam'], all_events_visitor, fecha_partido)
                     st.session_state['rest_days_local'] = rest_local
                     st.session_state['rest_days_visitor'] = rest_visitor
-
                     st.rerun()
             else:
                 st.info("No hay partidos programados en los próximos 2 días para esta competición.")
-                with st.expander("Ver todos los partidos sincronizados"):
-                    try:
-                        all_sorted = sorted(all_matches, key=lambda x: x.get('dateEvent', ''))
-                    except:
-                        all_sorted = all_matches
-                    for ev in all_sorted[:20]:
-                        dt_local = convertir_hora_elsalvador(ev.get('dateEvent', ''), ev.get('strTime', ''))
-                        if dt_local:
-                            fecha_str = formatear_dia_local(dt_local)
-                            hora_str = formatear_hora_local(dt_local)
-                            st.write(f"{fecha_str} {hora_str} - {ev['strHomeTeam']} vs {ev['strAwayTeam']}")
-                        else:
-                            st.write(f"{ev['dateEvent']} - {ev['strHomeTeam']} vs {ev['strAwayTeam']}")
         else:
             st.info("No hay partidos en esta competición para la temporada seleccionada.")
 
@@ -504,7 +420,6 @@ with st.container():
     col1, col2 = st.columns([1, 1])
     with col1:
         p_copa = st.number_input("Goles Prom. Copa", 0.5, 5.0, float(st.session_state.get('p_copa_auto', 2.5)), 0.01)
-        # El factor de ventaja local y visitante se calcula automáticamente (no hay sliders)
         modo_neutral = st.toggle("🏟️ Sede Neutral", value=False)
         is_second_leg = st.checkbox("¿Partido de vuelta?")
         if is_second_leg:
@@ -550,7 +465,7 @@ if analizar_btn:
     res = None
     adjustments = None
 
-    # Análisis de contexto de copa
+    # Contexto de copa
     if st.session_state.get('cup_matches_cached') and st.session_state.get('tl_stats') is not None:
         try:
             analyzer = CupContextAnalyzer(
@@ -566,12 +481,10 @@ if analizar_btn:
             logger.error(f"Error en análisis de contexto de copa: {e}")
             adjustments = None
 
-    # Calcular factores de ventaja local/visitante automáticamente
     home_adv_used, away_adv_used = get_auto_home_away_adv(
         st.session_state.get('cup_matches_cached', []),
         modo_neutral
     )
-    # Actualizar las variables de sesión por si se usan después
     st.session_state['h_adv_l'] = home_adv_used
     st.session_state['v_adv_v'] = away_adv_used
 
@@ -636,7 +549,6 @@ if analizar_btn:
             xg_l_adj = lgf
             xg_v_adj = vgf
 
-            # Factor de descanso
             rest_local = st.session_state.get('rest_days_local', 7)
             rest_visitor = st.session_state.get('rest_days_visitor', 7)
             rest_factor = min(1.2, max(0.8, rest_local / max(1, rest_visitor)))
@@ -646,17 +558,17 @@ if analizar_btn:
             if adjustments:
                 xg_l_adj *= adjustments['xg_factor']
                 xg_v_adj *= adjustments['xg_factor']
-            res = motor.procesar(xg_l_adj, xg_v_adj, cuotas=(o1, ox, o2), round_name=ronda)
-            res['1X2'] = (prob_local, prob_empate, prob_visita)
-            prob_reales = motor.desvig_odds((o1, ox, o2))
+
             if adjustments:
                 prob_empate += adjustments['draw_boost'] * 100
                 total_prob = prob_local + prob_empate + prob_visita
-                if total_prob > 0:
-                    prob_local = prob_local / total_prob * 100
-                    prob_empate = prob_empate / total_prob * 100
-                    prob_visita = prob_visita / total_prob * 100
-                res['1X2'] = (prob_local, prob_empate, prob_visita)
+                prob_local = prob_local / total_prob * 100
+                prob_empate = prob_empate / total_prob * 100
+                prob_visita = prob_visita / total_prob * 100
+
+            res = motor.procesar(xg_l_adj, xg_v_adj, cuotas=(o1, ox, o2), round_name=ronda)
+            res['1X2'] = (prob_local, prob_empate, prob_visita)
+            prob_reales = motor.desvig_odds((o1, ox, o2))
             res['EV'] = [((p/100)*c)-1 for p,c in zip([prob_local, prob_empate, prob_visita], (o1, ox, o2))]
             res['KELLY'] = [motor.calcular_kelly(p, c, pr) for p,c,pr in zip([prob_local, prob_empate, prob_visita], (o1, ox, o2), prob_reales)]
             res['DC'] = ((prob_local+prob_empate), (prob_visita+prob_empate), (prob_local+prob_visita))
@@ -676,7 +588,6 @@ if analizar_btn:
         xg_l_final = (lgf/p_copa)*(vgc/p_copa)*p_copa * f_adv_l
         xg_v_final = (vgf/p_copa)*(lgc/p_copa)*p_copa * f_adv_v
 
-        # Factor de descanso
         rest_local = st.session_state.get('rest_days_local', 7)
         rest_visitor = st.session_state.get('rest_days_visitor', 7)
         rest_factor = min(1.2, max(0.8, rest_local / max(1, rest_visitor)))
@@ -708,6 +619,7 @@ if analizar_btn:
         st.error("❌ No se pudo generar la predicción. Revisa los datos de entrada.")
         st.stop()
 
+    # Mostrar análisis de contexto
     if adjustments:
         with st.expander("🏆 Análisis de Contexto de Copa", expanded=True):
             col1, col2 = st.columns([1, 2])
