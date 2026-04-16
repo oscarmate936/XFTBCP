@@ -1,5 +1,5 @@
 # app.py
-# DeepXG Cup Predictor - Versión Mejorada
+# DeepXG Cup Predictor - Versión Mejorada con detección automática de ida
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# FUNCIONES AUXILIARES DE CÁLCULO
+# FUNCIONES AUXILIARES
 # ============================================================
 def get_auto_home_away_adv(cup_matches, modo_neutral):
     """Calcula factores de ventaja local y visitante basados en datos de la copa."""
@@ -209,6 +209,38 @@ def obtener_estadisticas_avanzadas(team_id, events, max_partidos=10):
     return (gd_3, gd_5, gd_10, avg_gf_3, avg_gc_3, btts_ratio,
             win_streak, loss_streak, racha, vol, mom)
 
+def find_first_leg_match(team_home, team_away, current_event_date, cup_matches):
+    """
+    Busca un partido previo entre los mismos equipos en la misma copa/temporada.
+    Retorna (goles_local_ida, goles_visitante_ida) o None si no se encuentra.
+    """
+    if not cup_matches:
+        return None
+    try:
+        current_date = datetime.strptime(current_event_date, '%Y-%m-%d').date()
+    except:
+        return None
+
+    best_match = None
+    for m in cup_matches:
+        try:
+            m_date = datetime.strptime(m['dateEvent'], '%Y-%m-%d').date()
+        except:
+            continue
+        if m_date >= current_date:
+            continue
+        if (m['strHomeTeam'] == team_home and m['strAwayTeam'] == team_away) or \
+           (m['strHomeTeam'] == team_away and m['strAwayTeam'] == team_home):
+            if best_match is None or m_date > best_match[0]:
+                best_match = (m_date, m)
+    if best_match:
+        match = best_match[1]
+        if match['strHomeTeam'] == team_home:
+            return int(match['intHomeScore']), int(match['intAwayScore'])
+        else:
+            return int(match['intAwayScore']), int(match['intHomeScore'])
+    return None
+
 # ============================================================
 # INICIALIZACIÓN DEL ESTADO DE SESIÓN
 # ============================================================
@@ -226,7 +258,8 @@ for key, default in [
     ('volatilidad_local', 0.0), ('volatilidad_visita', 0.0),
     ('momentum_local', 0.0), ('momentum_visita', 0.0),
     ('rest_days_local', 7), ('rest_days_visitor', 7),
-    ('cerebro_ensemble', None), ('cerebro_path', '')
+    ('cerebro_ensemble', None), ('cerebro_path', ''),
+    ('first_leg_auto_local', 0), ('first_leg_auto_visitor', 0), ('first_leg_detected', False)
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -401,6 +434,20 @@ with st.sidebar:
                     rest_visitor = get_rest_days(m['idAwayTeam'], all_events_visitor, fecha_partido)
                     st.session_state['rest_days_local'] = rest_local
                     st.session_state['rest_days_visitor'] = rest_visitor
+
+                    # --- Detectar automáticamente resultado de ida ---
+                    first_leg = find_first_leg_match(
+                        m['strHomeTeam'], m['strAwayTeam'],
+                        m['dateEvent'],
+                        st.session_state['cup_matches_cached']
+                    )
+                    if first_leg:
+                        st.session_state['first_leg_auto_local'] = first_leg[0]
+                        st.session_state['first_leg_auto_visitor'] = first_leg[1]
+                        st.session_state['first_leg_detected'] = True
+                    else:
+                        st.session_state['first_leg_detected'] = False
+
                     st.rerun()
             else:
                 st.info("No hay partidos programados en los próximos 2 días para esta competición.")
@@ -423,12 +470,16 @@ with st.container():
         modo_neutral = st.toggle("🏟️ Sede Neutral", value=False)
         is_second_leg = st.checkbox("¿Partido de vuelta?")
         if is_second_leg:
+            default_local = st.session_state.get('first_leg_auto_local', 0)
+            default_visitante = st.session_state.get('first_leg_auto_visitor', 0)
             col_ida1, col_ida2 = st.columns(2)
             with col_ida1:
-                goles_ida_local = st.number_input("Goles Local (ida)", 0, 10, 0)
+                goles_ida_local = st.number_input("Goles Local (ida)", 0, 10, default_local)
             with col_ida2:
-                goles_ida_visitante = st.number_input("Goles Visitante (ida)", 0, 10, 0)
+                goles_ida_visitante = st.number_input("Goles Visitante (ida)", 0, 10, default_visitante)
             first_leg_result = (goles_ida_local, goles_ida_visitante)
+            if st.session_state.get('first_leg_detected'):
+                st.success(f"✅ Resultado de ida detectado automáticamente: {default_local}-{default_visitante}")
         else:
             first_leg_result = None
     with col2:
@@ -465,7 +516,6 @@ if analizar_btn:
     res = None
     adjustments = None
 
-    # Contexto de copa
     if st.session_state.get('cup_matches_cached') and st.session_state.get('tl_stats') is not None:
         try:
             analyzer = CupContextAnalyzer(
@@ -619,7 +669,6 @@ if analizar_btn:
         st.error("❌ No se pudo generar la predicción. Revisa los datos de entrada.")
         st.stop()
 
-    # Mostrar análisis de contexto
     if adjustments:
         with st.expander("🏆 Análisis de Contexto de Copa", expanded=True):
             col1, col2 = st.columns([1, 2])
