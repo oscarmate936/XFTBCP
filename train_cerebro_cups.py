@@ -1,4 +1,5 @@
 # train_cerebro_cups.py
+# Entrenamiento del modelo ensemble para predicción de copas (1X2)
 import requests
 import pandas as pd
 import numpy as np
@@ -10,7 +11,6 @@ import sys
 import warnings
 warnings.filterwarnings('ignore')
 
-# Instalación automática de dependencias si es necesario
 try:
     import optuna
     from xgboost import XGBClassifier
@@ -34,13 +34,12 @@ except ImportError:
     from sklearn.model_selection import TimeSeriesSplit
     from sklearn.metrics import log_loss
 
-API_KEY = "406157"
+API_KEY = "406157"  # Reemplaza con tu API Key de TheSportsDB si es necesario
 BASE_URL = f"https://www.thesportsdb.com/api/v1/json/{API_KEY}/"
 
-# Lista de copas a considerar (ID, nombre, formato de temporada)
-# Para copas, usaremos múltiples temporadas: 2024-2025, 2025-2026, 2026 (para algunas)
+# Copas a utilizar
 COPAS_CONFIRMADAS = [
-    (4480, "Champions League", "split"),      # split: 2024-2025, 2025-2026, 2026-2027? pero usaremos 2024-2025 y 2025-2026
+    (4480, "Champions League", "split"),
     (4481, "Europa League", "split"),
     (5071, "Conference League", "split"),
     (4483, "Copa del Rey", "split"),
@@ -48,14 +47,13 @@ COPAS_CONFIRMADAS = [
     (4485, "Coppa Italia", "split"),
     (4486, "DFB-Pokal", "split"),
     (4487, "Coupe de France", "split"),
-    (4488, "Mundial de Clubes", "year"),      # year: 2024, 2025, 2026
+    (4488, "Mundial de Clubes", "year"),
 ]
 
-TEMPORADAS_SPLIT = ["2024-2025", "2025-2026"]   # añadir "2026-2027" cuando exista
-TEMPORADAS_YEAR = ["2024", "2025", "2026"]      # incluyendo 2026
+TEMPORADAS_SPLIT = ["2024-2025", "2025-2026"]
+TEMPORADAS_YEAR = ["2024", "2025", "2026"]
 
 def get_cup_events(cup_id, season):
-    """Obtiene eventos de una copa para una temporada."""
     url = f"{BASE_URL}eventsseason.php?id={cup_id}&s={season}"
     try:
         r = requests.get(url, timeout=15)
@@ -66,7 +64,6 @@ def get_cup_events(cup_id, season):
         return []
 
 def calcular_stats_avanzadas(goles, fechas, prom_liga, C=10.0, hl=30):
-    """Calcula xG ponderado, volatilidad y momentum."""
     if not goles:
         return prom_liga, 0.0, 0.0
     hoy = fechas[-1]
@@ -79,7 +76,6 @@ def calcular_stats_avanzadas(goles, fechas, prom_liga, C=10.0, hl=30):
     return xg_bayes, volatilidad, momentum
 
 def resolver_colley(n, partidos, eq_idx):
-    """Sistema de rating Colley (simple) para equipos."""
     M = np.diag([2.0] * n)
     b = np.ones(n)
     for h, v, r in partidos:
@@ -111,58 +107,50 @@ for idx, (cup_id, cup_nombre, formato) in enumerate(COPAS_CONFIRMADAS, 1):
         if not events:
             print(f"    ⚠️ No hay eventos para {cup_nombre} en {season}")
             continue
-        # Ordenar por fecha
         events = [e for e in events if e.get('dateEvent') and e.get('intHomeScore') is not None]
         events.sort(key=lambda x: x['dateEvent'])
         if not events:
             continue
-        # Promedio de goles de la copa en esa temporada
         total_goles = sum(int(e['intHomeScore']) + int(e['intAwayScore']) for e in events)
         prom_liga_temp = total_goles / len(events) if events else 2.5
         print(f"    Promedio goles: {prom_liga_temp:.2f}")
-        
-        # Estructuras para acumular historial por equipo
+
         est = {}
-        hist_c = []          # para Colley
+        hist_c = []
         eq_names = list(set([e['strHomeTeam'] for e in events] + [e['strAwayTeam'] for e in events]))
         idx_m = {name: i for i, name in enumerate(eq_names)}
         partidos_procesados = 0
-        
+
         for ev in events:
             hl, vl = ev['strHomeTeam'], ev['strAwayTeam']
             gh, ga = int(ev['intHomeScore']), int(ev['intAwayScore'])
             f = datetime.strptime(ev['dateEvent'], '%Y-%m-%d')
-            # Inicializar equipos si no existen
             for q in (hl, vl):
                 if q not in est:
                     est[q] = {'gf': [], 'gc': [], 'f': [], 'elo': 1500, 'pj': 0, 'pts_esp': []}
-            # Solo generar muestra si ambos tienen al menos 4 partidos previos (para tener datos suficientes)
             if est[hl]['pj'] >= 4 and est[vl]['pj'] >= 4:
-                # Calcular xG, volatilidad, momentum con datos históricos (solo copa)
                 xg_l, vol_l, mom_l = calcular_stats_avanzadas(est[hl]['gf'], est[hl]['f'], prom_liga_temp/2)
                 xg_v, vol_v, mom_v = calcular_stats_avanzadas(est[vl]['gf'], est[vl]['f'], prom_liga_temp/2)
                 def_l, _, _ = calcular_stats_avanzadas(est[hl]['gc'], est[hl]['f'], prom_liga_temp/2)
                 def_v, _, _ = calcular_stats_avanzadas(est[vl]['gc'], est[vl]['f'], prom_liga_temp/2)
-                # Rating Colley basado en todos los partidos hasta ahora
                 c_ratings = resolver_colley(len(idx_m), hist_c, idx_m)
-                # Estadísticas recientes
                 gf_h = est[hl]['gf']
                 gc_h = est[hl]['gc']
                 gf_a = est[vl]['gf']
                 gc_a = est[vl]['gc']
-                
+
                 gd_h_3 = sum(gf_h[-3:]) - sum(gc_h[-3:]) if len(gf_h) >= 3 else 0
                 gd_a_3 = sum(gf_a[-3:]) - sum(gc_a[-3:]) if len(gf_a) >= 3 else 0
                 gd_h_5 = sum(gf_h[-5:]) - sum(gc_h[-5:]) if len(gf_h) >= 5 else 0
                 gd_a_5 = sum(gf_a[-5:]) - sum(gc_a[-5:]) if len(gf_a) >= 5 else 0
                 gd_h_10 = sum(gf_h[-10:]) - sum(gc_h[-10:]) if len(gf_h) >= 10 else 0
                 gd_a_10 = sum(gf_a[-10:]) - sum(gc_a[-10:]) if len(gf_a) >= 10 else 0
-                
+
                 avg_gf_h_3 = np.mean(gf_h[-3:]) if len(gf_h) >= 3 else prom_liga_temp/2
                 avg_gc_h_3 = np.mean(gc_h[-3:]) if len(gc_h) >= 3 else prom_liga_temp/2
                 avg_gf_a_3 = np.mean(gf_a[-3:]) if len(gf_a) >= 3 else prom_liga_temp/2
                 avg_gc_a_3 = np.mean(gc_a[-3:]) if len(gc_a) >= 3 else prom_liga_temp/2
-                
+
                 def btts_ratio(gf, gc, n=5):
                     if len(gf) < n: return 0.5
                     cnt = 0
@@ -172,7 +160,7 @@ for idx, (cup_id, cup_nombre, formato) in enumerate(COPAS_CONFIRMADAS, 1):
                     return cnt / n
                 btts_h_5 = btts_ratio(gf_h, gc_h)
                 btts_a_5 = btts_ratio(gf_a, gc_a)
-                
+
                 pts_h = est[hl]['pts_esp']
                 pts_a = est[vl]['pts_esp']
                 win_streak_h = 0
@@ -191,11 +179,11 @@ for idx, (cup_id, cup_nombre, formato) in enumerate(COPAS_CONFIRMADAS, 1):
                 for p in reversed(pts_a):
                     if p == 0: loss_streak_a += 1
                     else: break
-                
+
                 pesos_racha = [0.1, 0.15, 0.2, 0.25, 0.3]
                 r_l = sum(p*w for p,w in zip(pts_h[-5:], pesos_racha)) if len(pts_h) >= 5 else 1.5
                 r_v = sum(p*w for p,w in zip(pts_a[-5:], pesos_racha)) if len(pts_a) >= 5 else 1.5
-                
+
                 data_final.append({
                     'ventaja_local': xg_l * (c_ratings.get(hl, 0.5) + 0.5),
                     'ventaja_visita': xg_v * (c_ratings.get(vl, 0.5) + 0.5),
@@ -225,8 +213,8 @@ for idx, (cup_id, cup_nombre, formato) in enumerate(COPAS_CONFIRMADAS, 1):
                     'fecha': f
                 })
                 partidos_procesados += 1
-            
-            # Actualizar estadísticas del equipo después del partido (para siguiente iteración)
+
+            # Actualizar estadísticas
             est[hl]['gf'].append(gh)
             est[hl]['gc'].append(ga)
             est[hl]['f'].append(f)
@@ -235,33 +223,30 @@ for idx, (cup_id, cup_nombre, formato) in enumerate(COPAS_CONFIRMADAS, 1):
             est[vl]['gc'].append(gh)
             est[vl]['f'].append(f)
             est[vl]['pj'] += 1
-            # Puntos (3,1,0) para racha
             pts_h_local = 3 if gh > ga else (1 if gh == ga else 0)
             pts_v_local = 3 if ga > gh else (1 if gh == ga else 0)
             est[hl]['pts_esp'].append(pts_h_local)
             est[vl]['pts_esp'].append(pts_v_local)
-            # Historial para Colley
             hist_c.append((idx_m[hl], idx_m[vl], 0 if gh > ga else (1 if gh == ga else 2)))
-            # Actualizar Elo simple
             exp = 1 / (1 + 10**((est[vl]['elo'] - est[hl]['elo']) / 400))
             resultado = 1 if gh > ga else (0.5 if gh == ga else 0)
             est[hl]['elo'] += 20 * (resultado - exp)
             est[vl]['elo'] += 20 * ((1 - resultado) - (1 - exp))
-        
+
         print(f"    Partidos útiles generados: {partidos_procesados}")
-        time.sleep(0.3)  # cortesía con la API
+        time.sleep(0.3)
 
 df = pd.DataFrame(data_final)
 if df.empty:
     print("\n❌ No se recopilaron suficientes datos. Abortando.")
     sys.exit(1)
 
-print(f"\n📊 Total de partidos recopilados para copas: {len(df)}")
+print(f"\n📊 Total de partidos recopilados: {len(df)}")
 df = df.sort_values('fecha')
 X = df.drop(columns=['resultado', 'fecha'])
 y = df['resultado']
 
-print("\n🔍 Optimización con Optuna y validación temporal (TimeSeriesSplit)...")
+print("\n🔍 Optimización con Optuna y validación temporal...")
 
 def objective(trial):
     params = {
@@ -342,4 +327,4 @@ filename = 'quantum_cerebro_cup_final.pkl'
 joblib.dump(cerebro_cup, filename, compress=3)
 size = os.path.getsize(filename) / 1e6
 print(f"\n✅ CEREBRO PARA COPAS GUARDADO en '{filename}'. Tamaño: {size:.2f} MB")
-print("🎉 Puedes usar este cerebro en app_cup.py colocándolo en la raíz del proyecto.")
+print("🎉 Puedes usar este cerebro en app.py colocándolo en la raíz del proyecto.")
