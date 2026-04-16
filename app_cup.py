@@ -1,5 +1,5 @@
 # app_cup.py
-# DeepXG Cup Predictor - Versión final corregida
+# DeepXG Cup Predictor - Versión final corregida (HTML renderizado correctamente)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -378,7 +378,7 @@ def mostrar_panel_sugerencias(sugerencias):
     if not sugerencias:
         return
 
-    # CSS como string separado para evitar conflictos con f-string
+    # CSS inyectado por separado
     st.markdown("""
     <style>
     .suggestions-panel {
@@ -459,11 +459,8 @@ def mostrar_panel_sugerencias(sugerencias):
     </style>
     """, unsafe_allow_html=True)
 
-    # Construir el HTML con cuidado, escapando valores dinámicos
-    html_parts = []
-    html_parts.append('<div class="suggestions-panel">')
-    html_parts.append('<div class="suggestions-title">🎯 Sugerencias Destacadas <span class="suggestion-badge">ALTA CONFIANZA</span></div>')
-    html_parts.append('<div class="suggestion-grid">')
+    # Construir HTML sin saltos de línea que puedan ser interpretados como código
+    html_parts = ['<div class="suggestions-panel"><div class="suggestions-title">🎯 Sugerencias Destacadas <span class="suggestion-badge">ALTA CONFIANZA</span></div><div class="suggestion-grid">']
 
     for sug in sugerencias:
         mercado = html.escape(sug['mercado'])
@@ -473,25 +470,24 @@ def mostrar_panel_sugerencias(sugerencias):
         ev_str = f" · EV {sug['ev']:+.2f}" if sug.get('ev') is not None else ''
         kelly_str = f" · K {sug['kelly']:.1f}%" if sug.get('kelly') is not None and sug['kelly'] > 0 else ''
         cuota_str = f" · Cuota {sug['cuota']:.2f}" if sug.get('cuota') is not None else ''
-        metricas = f"{ev_str}{kelly_str}{cuota_str}"
+        metricas = html.escape(f"{ev_str}{kelly_str}{cuota_str}")
 
-        card = f'''
-        <div class="suggestion-card">
-            <div class="suggestion-mercado">{mercado}</div>
-            <div class="suggestion-seleccion">{seleccion}</div>
-            <div style="display: flex; align-items: baseline; gap: 8px;">
-                <span class="suggestion-prob">{prob}%</span>
-                <span class="suggestion-ev">{metricas}</span>
-            </div>
-            <div class="suggestion-razon">{razon}</div>
-        </div>
-        '''
+        card = (
+            f'<div class="suggestion-card">'
+            f'<div class="suggestion-mercado">{mercado}</div>'
+            f'<div class="suggestion-seleccion">{seleccion}</div>'
+            f'<div style="display: flex; align-items: baseline; gap: 8px;">'
+            f'<span class="suggestion-prob">{prob}%</span>'
+            f'<span class="suggestion-ev">{metricas}</span>'
+            f'</div>'
+            f'<div class="suggestion-razon">{razon}</div>'
+            f'</div>'
+        )
         html_parts.append(card)
 
-    html_parts.append('</div>')
-    html_parts.append('</div>')
-
+    html_parts.append('</div></div>')
     full_html = ''.join(html_parts)
+
     st.markdown(full_html, unsafe_allow_html=True)
 
 # ============================================================
