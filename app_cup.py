@@ -1,16 +1,155 @@
-# app_cup.py — Calculadora de predicción de partidos con xG manuales
+# app_cup.py — Calculadora de predicción con xG manuales y calibración automática de parámetros de copa
 import streamlit as st
+import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from collections import Counter
 import logging
+from datetime import datetime
+import pytz
+from scipy.optimize import minimize
 
 from math_engine import MotorMatematico
+from api_utils import call_api, get_cup_matches
 from visual_components import render_dual_bar, render_outcome_card, apply_custom_css
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ============================================================
+# FUNCIONES DE CALIBRACIÓN DE PARÁMETROS DE COPA
+# ============================================================
+def calibrar_parametros_copa(cup_matches, prom_goles):
+    """
+    Estima rho, alpha, pi_l, pi_v a partir de los partidos de la copa,
+    asumiendo equipos de igual fuerza y usando el promedio de goles observado.
+    """
+    if not cup_matches or len(cup_matches) < 5:
+        # Valores por defecto si no hay suficientes datos
+        return 0.0, 0.05, 0.06, 0.09
+
+    # Extraer goles
+    goles_h = []
+    goles_a = []
+    for m in cup_matches:
+        try:
+            goles_h.append(int(m['intHomeScore']))
+            goles_a.append(int(m['intAwayScore']))
+        except:
+            continue
+    if len(goles_h) < 5:
+        return 0.0, 0.05, 0.06, 0.09
+
+    goles_h = np.array(goles_h)
+    goles_a = np.array(goles_a)
+
+    # Lambda base (media de goles por equipo) = promedio total / 2
+    lambda_base = max(0.1, prom_goles / 2.0)
+
+    def nb_probs(lam, alpha, size=12):
+        """Distribución binomial negativa (o Poisson si alpha→0) para los primeros 'size' valores."""
+        k = np.arange(size)
+        if alpha < 1e-6:
+            return np.exp(-lam) * lam**k / np.math.factorial(k)  # Poisson PMF
+        r = 1.0 / alpha
+        p = 1.0 / (1.0 + alpha * lam)
+        # nbinom.pmf(k, r, p)
+        from scipy.stats import nbinom
+        return nbinom.pmf(k, r, p)
+
+    def bivar_probs(l1, l2, rho, alpha, pi_l, pi_v, size=12):
+        """Matriz de probabilidades de la bivariada ZINB + Dixon-Coles."""
+        # Probabilidades marginales con zero-inflation
+        p_l = (1 - pi_l) * nb_probs(l1, alpha, size)
+        p_l[0] += pi_l
+        p_v = (1 - pi_v) * nb_probs(l2, alpha, size)
+        p_v[0] += pi_v
+
+        M = np.outer(p_l, p_v)
+
+        # Ajuste Dixon-Coles para 0-0, 1-0, 0-1, 1-1
+        if rho != 0 and l1 > 0 and l2 > 0:
+            M[0, 0] *= max(0, 1 - l1 * l2 * rho)
+            if size > 1:
+                M[0, 1] *= max(0, 1 + l1 * rho)
+                M[1, 0] *= max(0, 1 + l2 * rho)
+            if size > 1:
+                M[1, 1] *= max(0, 1 - rho)
+        # Normalizar
+        total = M.sum()
+        if total > 0:
+            M /= total
+        return M
+
+    def log_lik(params):
+        rho, alpha, pi_l, pi_v = params
+        # Restricciones suaves
+        if alpha < 0 or pi_l < 0 or pi_l > 1 or pi_v < 0 or pi_v > 1:
+            return 1e10
+        M = bivar_probs(lambda_base, lambda_base, rho, alpha, pi_l, pi_v, size=12)
+        # Para cada partido, obtener la probabilidad conjunta
+        ll = 0.0
+        for gh, ga in zip(goles_h, goles_a):
+            if gh < 12 and ga < 12:   # limitamos a 12 goles máximo (poco probable)
+                prob = M[gh, ga]
+            else:
+                prob = 0.0
+            if prob <= 0:
+                prob = 1e-15
+            ll += np.log(prob)
+        return -ll
+
+    # Valores iniciales
+    x0 = [0.0, 0.05, 0.06, 0.09]
+    bounds = [(-0.3, 0.3), (0.001, 0.5), (0.0, 0.3), (0.0, 0.3)]
+    try:
+        res = minimize(log_lik, x0, bounds=bounds, method='L-BFGS-B')
+        if res.success:
+            rho, alpha, pi_l, pi_v = res.x
+            return rho, alpha, pi_l, pi_v
+    except Exception as e:
+        logger.warning(f"Calibración fallida: {e}")
+    return 0.0, 0.05, 0.06, 0.09
+
+
+# ============================================================
+# FUNCIONES AUXILIARES DE INTERFAZ
+# ============================================================
+def convertir_hora_elsalvador(fecha_str, hora_str=None):
+    tz_sv = pytz.timezone('America/El_Salvador')
+    if not fecha_str:
+        return None
+    try:
+        if 'T' in fecha_str:
+            fecha_str_clean = fecha_str.replace('Z', '+00:00')
+            dt_utc = datetime.fromisoformat(fecha_str_clean)
+            if dt_utc.tzinfo is None:
+                dt_utc = pytz.UTC.localize(dt_utc)
+            return dt_utc.astimezone(tz_sv)
+        else:
+            dt_naive = datetime.strptime(fecha_str, '%Y-%m-%d')
+            if hora_str and hora_str.strip():
+                partes = hora_str.split(':')
+                hh, mm = int(partes[0]), int(partes[1])
+                ss = int(partes[2]) if len(partes) > 2 else 0
+                dt_naive = dt_naive.replace(hour=hh, minute=mm, second=ss)
+            dt_utc = pytz.UTC.localize(dt_naive)
+            return dt_utc.astimezone(tz_sv)
+    except Exception as e:
+        logger.error(f"Error convirtiendo fecha {fecha_str}: {e}")
+        return None
+
+def formatear_dia_local(dt):
+    if dt is None:
+        return "Fecha no disponible"
+    dias = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+    meses = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+             'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+    return f"{dias[dt.weekday()]} {dt.day} de {meses[dt.month-1]}"
+
+def formatear_hora_local(dt):
+    return dt.strftime("%H:%M") if dt else "??:??"
 
 def generar_sugerencias(res, cuotas, nombres_equipos):
     sugerencias = []
@@ -247,14 +386,135 @@ def mostrar_panel_sugerencias(sugerencias):
     full_html = ''.join(html_parts)
     st.markdown(full_html, unsafe_allow_html=True)
 
+
 # ============================================================
-# INTERFAZ DE USUARIO
+# INICIALIZACIÓN DEL ESTADO DE SESIÓN
 # ============================================================
+for key, default in [
+    ('cup_matches_cached', []),
+    ('p_copa_auto', 2.5),
+    ('nl_auto', ''),
+    ('nv_auto', ''),
+    ('rho_calibrado', 0.0),
+    ('alpha_calibrado', 0.05),
+    ('pi_l_calibrado', 0.06),
+    ('pi_v_calibrado', 0.09),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
+
 apply_custom_css()
 st.set_page_config(page_title="DeepXG Cup Predictor", layout="wide")
 
+# ============================================================
+# BARRA LATERAL – SINCRONIZACIÓN DE COPA
+# ============================================================
+with st.sidebar:
+    st.markdown("<h3 style='color:var(--primary); font-weight:700; margin-bottom:0;'>🏆 Data Hub - Copas</h3>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size:0.7rem; color:var(--text-sub); margin-bottom:1rem;'>Sincroniza para calibrar parámetros</p>", unsafe_allow_html=True)
+
+    copas = {
+        "🏆 Champions League": {"id": 4480, "season_default": "2025-2026"},
+        "🏆 Europa League": {"id": 4481, "season_default": "2025-2026"},
+        "🏆 Conference League": {"id": 5071, "season_default": "2025-2026"},
+        "🇪🇸 Copa del Rey": {"id": 4483, "season_default": "2025-2026"},
+        "🇬🇧 FA Cup": {"id": 4490, "season_default": "2025-2026"},
+        "🇮🇹 Coppa Italia": {"id": 4485, "season_default": "2025-2026"},
+        "🇩🇪 DFB-Pokal": {"id": 4486, "season_default": "2025-2026"},
+        "🇫🇷 Coupe de France": {"id": 4487, "season_default": "2025-2026"},
+        "🌍 Mundial de Clubes": {"id": 4488, "season_default": "2026"},
+    }
+
+    copa_sel = st.selectbox("Elegir Copa", list(copas.keys()))
+    cup_info = copas[copa_sel]
+    cup_id = cup_info["id"]
+    season = st.text_input("Temporada (ej. 2025-2026 o 2025)", value=cup_info["season_default"])
+
+    if st.button("🔄 Sincronizar Datos", use_container_width=True):
+        with st.spinner(f"Sincronizando {copa_sel} {season}..."):
+            matches = get_cup_matches(cup_id, season)
+        if matches:
+            st.session_state['cup_matches_cached'] = matches
+            # Calcular promedio de goles
+            total_goles = 0
+            total_partidos = 0
+            for m in matches:
+                try:
+                    total_goles += int(m['intHomeScore']) + int(m['intAwayScore'])
+                    total_partidos += 1
+                except:
+                    continue
+            prom = total_goles / max(1, total_partidos)
+            st.session_state['p_copa_auto'] = round(prom, 2)
+
+            # Calibrar parámetros de la copa (rho, alpha, pi)
+            rho, alpha, pi_l, pi_v = calibrar_parametros_copa(matches, prom)
+            st.session_state['rho_calibrado'] = rho
+            st.session_state['alpha_calibrado'] = alpha
+            st.session_state['pi_l_calibrado'] = pi_l
+            st.session_state['pi_v_calibrado'] = pi_v
+
+            st.success(f"✅ {len(matches)} partidos cargados. Promedio goles: {prom:.2f} | ρ={rho:.3f}, α={alpha:.3f}")
+        else:
+            st.error("❌ No se encontraron partidos. Prueba otra temporada.")
+        st.rerun()
+
+    # Si hay partidos sincronizados, mostrar próximos partidos y cargar equipos
+    if st.session_state.get('cup_matches_cached'):
+        st.markdown("---")
+        st.markdown("### 📅 Próximos partidos (2 días)")
+        all_matches = st.session_state['cup_matches_cached']
+        if all_matches:
+            tz_sv = pytz.timezone('America/El_Salvador')
+            hoy_local = datetime.now(tz_sv).date()
+            limite = hoy_local + pd.Timedelta(days=2)
+            partidos_proximos = []
+            for ev in all_matches:
+                dt_local = convertir_hora_elsalvador(ev.get('dateEvent', ''), ev.get('strTime', ''))
+                if dt_local is not None:
+                    fecha_local = dt_local.date()
+                    if hoy_local <= fecha_local <= limite:
+                        partidos_proximos.append(ev)
+                else:
+                    try:
+                        fecha_str = ev.get('dateEvent', '')
+                        if fecha_str:
+                            fecha_naive = datetime.strptime(fecha_str, '%Y-%m-%d').date()
+                            if hoy_local <= fecha_naive <= limite:
+                                partidos_proximos.append(ev)
+                    except:
+                        pass
+            if partidos_proximos:
+                partidos_proximos.sort(key=lambda x: (x.get('dateEvent', ''), x.get('strTime', '')))
+                opciones = []
+                mapeo = {}
+                for ev in partidos_proximos:
+                    dt_local = convertir_hora_elsalvador(ev.get('dateEvent', ''), ev.get('strTime', ''))
+                    if dt_local:
+                        fecha_str = formatear_dia_local(dt_local)
+                        hora_str = formatear_hora_local(dt_local)
+                        texto = f"{fecha_str} {hora_str} - {ev['strHomeTeam']} vs {ev['strAwayTeam']}"
+                    else:
+                        texto = f"{ev['dateEvent']} - {ev['strHomeTeam']} vs {ev['strAwayTeam']}"
+                    opciones.append(texto)
+                    mapeo[texto] = ev
+                sel_match = st.selectbox("Selecciona partido", opciones)
+                if st.button("📋 Cargar Equipos", use_container_width=True):
+                    ev = mapeo[sel_match]
+                    st.session_state['nl_auto'] = ev['strHomeTeam']
+                    st.session_state['nv_auto'] = ev['strAwayTeam']
+                    st.rerun()
+            else:
+                st.info("No hay partidos próximos en esta competición.")
+        else:
+            st.info("Sin datos de partidos.")
+
+
+# ============================================================
+# PANEL PRINCIPAL – ENTRADA MANUAL DE xG Y CUOTAS
+# ============================================================
 st.markdown("<h1 class='app-title'>DeepXG <span>Cup Predictor</span></h1>", unsafe_allow_html=True)
-st.markdown("<p class='app-subtitle'>PREDICCIÓN BASADA EN xG MANUALES</p>", unsafe_allow_html=True)
+st.markdown("<p class='app-subtitle'>PREDICCIÓN BASADA EN xG MANUALES · PARÁMETROS DE COPA CALIBRADOS</p>", unsafe_allow_html=True)
 
 with st.container():
     st.markdown('<div class="premium-card">', unsafe_allow_html=True)
@@ -262,13 +522,20 @@ with st.container():
 
     col1, col2 = st.columns([1, 1])
     with col1:
-        nl = st.text_input("🏠 Nombre Local", "Local")
-        lgf = st.number_input("xG Local", 0.0, 5.0, 1.2, step=0.05)
+        nl = st.text_input("🏠 Nombre Local", st.session_state.get('nl_auto', 'Local'))
+        lgf = st.number_input("xG Local (manual)", 0.0, 5.0, 1.2, step=0.05)
     with col2:
-        nv = st.text_input("✈️ Nombre Visitante", "Visitante")
-        vgf = st.number_input("xG Visitante", 0.0, 5.0, 1.0, step=0.05)
+        nv = st.text_input("✈️ Nombre Visitante", st.session_state.get('nv_auto', 'Visitante'))
+        vgf = st.number_input("xG Visitante (manual)", 0.0, 5.0, 1.0, step=0.05)
 
-    p_copa = st.number_input("Promedio de goles de la liga/copa", 0.5, 5.0, 2.5, step=0.01)
+    # Mostrar y permitir ajustar el promedio de goles de la copa (calculado automáticamente)
+    p_copa = st.number_input(
+        "Promedio de goles de la copa",
+        0.5, 5.0,
+        float(st.session_state.get('p_copa_auto', 2.5)),
+        step=0.01,
+        help="Calculado automáticamente desde los datos de la copa. Puedes ajustarlo manualmente."
+    )
 
     st.markdown("#### 📊 Cuotas de Mercado (1X2)")
     odd_cols = st.columns(3)
@@ -283,16 +550,24 @@ with st.container():
     st.markdown('</div>', unsafe_allow_html=True)
 
 if analizar_btn:
-    # Instanciar motor con el promedio de goles manual
-    motor = MotorMatematico(p_copa, draw_rate_real=0.25)
-    # Procesar directamente con los xG manuales y las cuotas
+    # Crear motor con los parámetros calibrados de la copa (o por defecto)
+    motor = MotorMatematico.__new__(MotorMatematico)  # Evitar __init__ que optimiza rho simple
+    motor.league_avg = p_copa
+    motor.draw_rate_real = 0.25  # No se usa realmente, pero lo dejamos
+    # Asignar los parámetros calibrados
+    motor.rho = st.session_state.get('rho_calibrado', 0.0)
+    motor.alpha = st.session_state.get('alpha_calibrado', 0.05)
+    motor.pi_l = st.session_state.get('pi_l_calibrado', 0.06)
+    motor.pi_v = st.session_state.get('pi_v_calibrado', 0.09)
+
+    # Procesar con los xG manuales
     res = motor.procesar(lgf, vgf, cuotas=(o1, ox, o2))
 
     # Sugerencias
     sugerencias = generar_sugerencias(res, (o1, ox, o2), (nl, nv))
     mostrar_panel_sugerencias(sugerencias)
 
-    # Pestañas de resultados
+    # Pestañas de resultados (idénticas a antes)
     t1, t2, t3, t4, t5 = st.tabs(["🥅 Goles", "📊 1X2", "🛡️ Doble O", "🎲 Simulador", "🧩 Matriz"])
 
     with t1:
