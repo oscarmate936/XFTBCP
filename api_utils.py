@@ -30,27 +30,3 @@ def get_cup_matches(cup_id, season):
     else:
         logger.warning(f"No hay partidos para copa {cup_id} temp {season}")
         return []
-
-def get_team_cup_stats(team_id, cup_matches):
-    gf = 0
-    gc = 0
-    pj = 0
-    for ev in cup_matches:
-        try:
-            if str(ev.get('idHomeTeam')) == str(team_id):
-                gf += int(ev['intHomeScore'])
-                gc += int(ev['intAwayScore'])
-                pj += 1
-            elif str(ev.get('idAwayTeam')) == str(team_id):
-                gf += int(ev['intAwayScore'])
-                gc += int(ev['intHomeScore'])
-                pj += 1
-        except:
-            continue
-    return pj, gf, gc
-
-def get_team_last_matches(team_id, limit=10):
-    """Obtiene los últimos 'limit' partidos de un equipo (todas competiciones)."""
-    data = call_api("eventslast.php", f"?id={team_id}")
-    events = data.get('results', []) if data else []
-    return events[:limit]
