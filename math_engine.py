@@ -1,35 +1,18 @@
 # math_engine.py
-import streamlit as st
 import numpy as np
 from scipy.stats import poisson, nbinom
-from scipy.optimize import minimize
 from collections import Counter
-import warnings
-from typing import List, Dict, Tuple, Optional, Any
-
-warnings.filterwarnings("ignore", message=".*PyTensor.*")
-warnings.filterwarnings("ignore", message=".*effective sample size.*")
-warnings.filterwarnings("ignore", message=".*divergencias.*")
-
+from typing import Dict, Any, Tuple, List
 
 class MotorMatematico:
-    def __init__(self, league_avg: float = 2.5, draw_rate_real: float = 0.25):
+    def __init__(self, league_avg: float = 2.5,
+                 rho: float = 0.0, alpha: float = 0.05,
+                 pi_l: float = 0.06, pi_v: float = 0.09):
         self.league_avg = league_avg
-        self.draw_rate_real = draw_rate_real
-        self.alpha = 0.05
-        self.pi_l = 0.06
-        self.pi_v = 0.09
-        self.rho = self._optimizar_rho_simple(draw_rate_real, league_avg)
-
-    def _optimizar_rho_simple(self, empates_reales_pct: float, prom_liga: float) -> float:
-        l_prom = max(0.1, prom_liga / 2)
-        def loss(rho_test: np.ndarray) -> float:
-            self.rho = float(rho_test[0])
-            matriz = self.bivariate_poisson(l_prom, l_prom, size=5)
-            p_empate = np.trace(matriz)
-            return (p_empate - empates_reales_pct) ** 2
-        res = minimize(loss, [0.0], bounds=[(-0.3, 0.2)])
-        return float(res.x[0])
+        self.rho = rho
+        self.alpha = alpha
+        self.pi_l = pi_l
+        self.pi_v = pi_v
 
     def bivariate_poisson(self, l1: float, l2: float, size: int = 12) -> np.ndarray:
         l1 = max(0.01, l1)
@@ -74,7 +57,8 @@ class MotorMatematico:
             return [0.33, 0.33, 0.33]
         return [p / margen for p in inv_odds]
 
-    def calcular_kelly(self, prob_modelo: float, cuota: float, prob_real_bookie: float, stake_back: float = 0.20) -> float:
+    def calcular_kelly(self, prob_modelo: float, cuota: float,
+                       prob_real_bookie: float, stake_back: float = 0.20) -> float:
         if cuota <= 1.0:
             return 0
         p = prob_modelo / 100.0
@@ -95,7 +79,8 @@ class MotorMatematico:
             base_sims = np.random.poisson(xg, sims)
         return np.where(ceros_estructurales, 0, base_sims)
 
-    def procesar(self, xg_l: float, xg_v: float, cuotas: Tuple[float, float, float] = (1.0, 1.0, 1.0)) -> Dict[str, Any]:
+    def procesar(self, xg_l: float, xg_v: float,
+                 cuotas: Tuple[float, float, float] = (1.0, 1.0, 1.0)) -> Dict[str, Any]:
         size = 12
         matriz = self.bivariate_poisson(xg_l, xg_v, size)
         p1 = np.sum(np.tril(matriz, -1))
@@ -124,7 +109,8 @@ class MotorMatematico:
 
         prob_reales = self.desvig_odds(cuotas)
         evs = [((p) * c) - 1 for p, c in zip([p1, px, p2], cuotas)]
-        kellys = [self.calcular_kelly(p * 100, c, pr) for p, c, pr in zip([p1, px, p2], cuotas, prob_reales)]
+        kellys = [self.calcular_kelly(p * 100, c, pr)
+                  for p, c, pr in zip([p1, px, p2], cuotas, prob_reales)]
 
         return {
             "1X2": (p1 * 100, px * 100, p2 * 100),
